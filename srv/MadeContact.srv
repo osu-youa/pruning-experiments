@@ -1,0 +1,5 @@
+# inputs
+bool made_contact
+---
+# outputs
+bool is_successful

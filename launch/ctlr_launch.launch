@@ -1,0 +1,21 @@
+<!--
+	Launch file for the admittance controller for the pruning project.
+  
+    Hannah Kolano
+    Last modified 8/23/2021
+-->
+
+<launch>
+
+<!-- Start a publisher node, remapping the topic name from "counter" to "number". -->
+<node pkg="pruning_imp_ctlr" name="force_filter" type="force_filter.py" output="screen">
+</node>
+
+<node pkg="pruning_imp_ctlr" name="admit_ctlr" type="admit_ctlr.py" output="screen">
+</node>
+
+<node pkg="pruning_imp_ctlr" name="contact_server" type="contact_server.py" output="screen">
+</node>
+
+
+</launch>
