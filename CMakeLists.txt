@@ -57,10 +57,10 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 # Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#
-# )
+add_service_files(
+  FILES
+  ServoWaypoints.srv
+)
 
 ## Generate actions in the 'action' folder
 # add_action_files(
@@ -73,6 +73,7 @@ find_package(catkin REQUIRED COMPONENTS
 generate_messages(
   DEPENDENCIES
   std_msgs  # Or other packages containing msgs
+  geometry_msgs
 )
 
 ################################################

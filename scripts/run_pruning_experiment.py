@@ -13,10 +13,12 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState
 import cPickle as pickle
+from pruning_experiments.srv import ServoWaypoints
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 base_frame = 'base_link'
 tool_frame = 'tool0'
+fwd_velocity = 0.03
 POSE_LIST = []
 ACTIVE_POSE = None
 
@@ -44,6 +46,12 @@ def tf_to_pose(tf, keep_header=False):
     pose_stamped.pose = pose
     pose_stamped.header = header
     return pose_stamped
+
+def pt_to_array(pt):
+    if isinstance(pt, PointStamped):
+        pt = pt.point
+
+    return np.array([pt.x, pt.y, pt.z])
 
 def retrieve_tf(base_frame, target_frame, stamp = rospy.Time()):
 
@@ -142,8 +150,33 @@ def preview_grid():
 
     plan_joints_srv(current_joints, True)
 
-def run_open_loop():
-    pass
+def run_open_loop(camera_base='tool0'):
+
+    # TODO: Wait for point cloud message, otherwise default to using standard
+    camera_connected = False
+    if camera_connected:
+        raise NotImplementedError()
+    else:
+        # If no camera is connected, just run a test motion
+        print('No camera connected! Running test motion...')
+        final_target = PointStamped()
+        final_target.header.frame_id = tool_frame
+        final_target.point = Point(0.0, -0.05, 0.15)
+
+    tf = retrieve_tf(final_target.header.frame_id, base_frame)
+    final_target = do_transform_point(final_target, tf)
+    final_target_array = pt_to_array(final_target)
+    intermediate_array = final_target_array - np.array([0.0, 0.01, 0.04])
+
+    waypoints = []
+    for array in [intermediate_array, final_target_array]:
+        pt = PointStamped()
+        pt.header.frame_id = base_frame
+        pt.point = Point(*array)
+        waypoints.append(pt)
+
+    response = open_loop_srv(waypoints, fwd_velocity)
+    print(response)
 
 def run_closed_loop():
     pass
@@ -163,13 +196,9 @@ if __name__ == '__main__':
 
     plan_pose_srv = rospy.ServiceProxy('plan_pose', HandlePosePlan)
     plan_joints_srv = rospy.ServiceProxy('plan_joints', HandleJointPlan)
-
+    open_loop_srv = rospy.ServiceProxy('servo_waypoints', ServoWaypoints)
 
     rospy.sleep(1.0)
-
-
-
-
 
     actions = [
         ('Set the active pose', set_active_pose),
