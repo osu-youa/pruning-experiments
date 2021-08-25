@@ -12,12 +12,11 @@ from tf2_geometry_msgs import do_transform_point
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Empty
 import cPickle as pickle
 from pruning_experiments.srv import ServoWaypoints
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
-base_frame = 'base_link'
-tool_frame = 'tool0'
 fwd_velocity = 0.03
 POSE_LIST = []
 ACTIVE_POSE = None
@@ -165,6 +164,10 @@ def run_open_loop(camera_base='tool0'):
 
     tf = retrieve_tf(final_target.header.frame_id, base_frame)
     final_target = do_transform_point(final_target, tf)
+
+    import pdb
+    pdb.set_trace()
+
     final_target_array = pt_to_array(final_target)
     intermediate_array = final_target_array - np.array([0.0, 0.01, 0.04])
 
@@ -177,6 +180,9 @@ def run_open_loop(camera_base='tool0'):
 
     response = open_loop_srv(waypoints, fwd_velocity)
     print(response)
+
+    raw_input('Servoing done! Press Enter to rewind...')
+    servo_rewind()
 
 def run_closed_loop():
     pass
@@ -191,12 +197,16 @@ if __name__ == '__main__':
 
     # SETUP
     rospy.init_node('experiment_manager')
+    base_frame = rospy.get_param('base_frame')
+    tool_frame = rospy.get_param('tool_frame')
+
     tf_buffer = Buffer()
     tf_listener = TransformListener2(tf_buffer)
 
     plan_pose_srv = rospy.ServiceProxy('plan_pose', HandlePosePlan)
     plan_joints_srv = rospy.ServiceProxy('plan_joints', HandleJointPlan)
     open_loop_srv = rospy.ServiceProxy('servo_waypoints', ServoWaypoints)
+    servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
 
     rospy.sleep(1.0)
 

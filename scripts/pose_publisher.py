@@ -41,14 +41,14 @@ if __name__ == '__main__':
 
     rospy.init_node('pose_publisher')
 
-    base_frame = 'base_link'
-    tool_frame = 'tool0'
+    base_frame = rospy.get_param('base_frame')
+    tool_frame = rospy.get_param('tool_frame')
     pub_topic = 'tool_pose'
 
     pub = rospy.Publisher(pub_topic, PoseStamped, queue_size=1)
     tf_buffer = Buffer()
     tf_listener = TransformListener2(tf_buffer)
-    rospy.sleep(1.0)
+    rospy.sleep(3.0)
 
     rate = rospy.Rate(50)
     while not rospy.is_shutdown():

@@ -7,6 +7,8 @@
     <param name="robot_ip" value="$(arg ip)" />
     <param name="camera_frame_real" value="camera_frame_real" />
     <param name="camera_frame_fake" value="camera_frame_fake" />
+    <param name="base_frame" value="base_link" />
+    <param name="tool_frame" value="tool0" />
 
     <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch">
         <arg name="robot_ip" value="$(arg ip)" />
@@ -22,6 +24,7 @@
         <node name="neural_network_receiver" pkg="pruning_experiments" type="velocity_command_client.py" output="screen" />
     </group>
 
+    <node name="pose_publisher" pkg="pruning_experiments" type="pose_publisher.py" output="screen" />
     <node name="open_loop_control_manager" pkg="pruning_experiments" type="open_loop_control.py" output="screen" />
     <node name="control_manager" pkg="pruning_experiments" type="control_manager.py" output="screen" />
 
