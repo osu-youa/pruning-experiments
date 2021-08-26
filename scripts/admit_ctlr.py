@@ -24,7 +24,8 @@ class AdmitCtlr():
         self.wrench_sub = rospy.Subscriber('/wrench_filtered', WrenchStamped, self.wrench_callback)
         # Publish velocities to robot
         self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
-        self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
+        # self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
+
 	    # Set up servoing services
         if is_connected:
     	    servo_activate = rospy.ServiceProxy('/servo_activate', Empty)
@@ -35,7 +36,7 @@ class AdmitCtlr():
         self.des_wrench = np.array([0, 0, 0, 0, 0, -1.5])
         # Controller gains 
         self.Kf = .05 # M
-        self.Kd = .05 # D (or B, but the damping term)
+        self.Kd = 200 # D (or B, but the damping term)
         # Selection matrix
         self.l = np.diag([1, 0, 0, 0, 1, 1])
         # Velocity limit
@@ -48,8 +49,10 @@ class AdmitCtlr():
 
         self.stop_force_thresh = 0.25
         self.stop_torque_thresh = 0.01
+        self.publish_freq = 500.0
 
         self.vel = Vector3Stamped()
+        self.vel_prev = np.array([0, 0, 0, 0, 0, 0])
         self.vel.header.stamp = rospy.Time.now()
         self.vel.header.frame_id = 'tool0_controller'
         self.vel.vector = Vector3(0.0, 0.0, 0.0)
@@ -150,23 +153,27 @@ class AdmitCtlr():
         # Write the wrench_msg into an array
         w = wrench_msg.wrench
         wrench_vec = np.array([w.torque.x, w.torque.y, w.torque.z, w.force.x, w.force.y, w.force.z])
-	    # rospy.loginfo("checking wrench state: {}".format(wrench_vec))
         rospy.logdebug('New wrench. \n Y force: {0} \n Z force: {1} \n X moment: {2}'.format(wrench_vec[4], wrench_vec[5], wrench_vec[0]))
         
-        # Admittance controller 
+        # Admittance controller terms
+        # acceleration due to force (M-1 * force_des-force_actual)
         acc_des_force_term = -self.Kf*np.dot(self.l,self.des_wrench-self.deadzone(wrench_vec))
-        acc_des_damp_term = -self.Kf*self.Kd*-self.vel_prev
+        # acceleration due to damping (M-1 * B * x')
+        acc_des_damp_term = -self.Kf*self.Kd*self.vel_prev
 
+        # What the controller was before (directly doing velocity)
         vel_des_og = acc_des_force_term
-        vel_des_acc = self.vel_prev + (1/500)*(acc_des_force_term+acc_des_damp_term)
+        # New controller -- use the acceleration and the publish rate to update the velocity
+        vel_des_acc = self.vel_prev + (1/self.publish_freq)*(acc_des_force_term+acc_des_damp_term)
 
-        self.vel_prev = np.array([0, 0, 0, 0, vel_des_acc[4], vel_des_acc[5]])
         # Impose the velocity limit
         vel_y_limited_og = self.impose_vel_limit(vel_des_og[4])
         vel_z_limited_og = self.impose_vel_limit(vel_des_og[5])
 
         vel_y_limited_acc = self.impose_vel_limit(vel_des_acc[4])
         vel_z_limited_acc = self.impose_vel_limit(vel_des_acc[5])
+
+        self.vel_prev = np.array([0, 0, 0, 0, vel_y_limited_acc, vel_z_limited_acc])
 	
         # Set up and publish the velocity command
         self.vel.header.stamp = rospy.Time.now()
@@ -176,7 +183,7 @@ class AdmitCtlr():
 
         vel2 = self.vel
         vel2.vector = Vector3(0.0, vel_y_limited_acc, vel_z_limited_acc)
-        self.vel_pub_acc.publish(self.vel)
+        self.vel_pub_acc.publish(vel2)
 
         # Display human-readable controller directions to the terminal
         self.show_ctlr_direction(vel_y_limited_og, vel_z_limited_og)
