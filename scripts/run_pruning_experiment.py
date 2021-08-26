@@ -14,10 +14,12 @@ from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Empty
 import cPickle as pickle
-from pruning_experiments.srv import ServoWaypoints
+from pruning_experiments.srv import ServoWaypoints, RecordData
+from functools import partial
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
+POSE_ID = None
 POSE_LIST = []
 ACTIVE_POSE = None
 
@@ -25,6 +27,15 @@ ACTIVE_POSE = None
 # ==========
 # UTILS
 # ==========
+
+def get_file_name(open_loop=False, variant=False):
+    if ACTIVE_POSE is None:
+        return None
+    identifier = open_loop * 2 + variant
+    return 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE)
+
+def record_success():
+    print('[TODO]')
 
 def tf_to_pose(tf, keep_header=False):
     header = None
@@ -80,18 +91,28 @@ def save_status():
         'poses': POSE_LIST,
         'active_pose': None,
     }
-    with open(os.path.join(data_folder, 'status.pickle'), 'wb') as fh:
-        pickle.dump(output, fh)
+    counter = 0
+    while True:
+        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(counter))
+        if os.path.exists(file):
+            counter += 1
+            continue
+        with open(file, 'wb') as fh:
+            pickle.dump(output, fh)
+        return counter
 
-def load_status():
+def load_status(pose_id):
+    file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
     try:
-        with open(os.path.join(data_folder, 'status.pickle'), 'rb') as fh:
+        with open(file, 'rb') as fh:
             rez = pickle.load(fh)
     except IOError:
-        print('No poses have been saved!')
+        print('No such pose exists!')
         return
+    global POSE_ID
     global POSE_LIST
     global ACTIVE_POSE
+    POSE_ID = pose_id
     POSE_LIST = rez['poses']
     ACTIVE_POSE = rez['active_pose']
 
@@ -102,14 +123,16 @@ def load_status():
 def set_active_pose():
     global POSE_LIST
     global ACTIVE_POSE
+    global POSE_ID
     tf = retrieve_tf(tool_frame, base_frame)
     POSE_LIST = generate_pose_grid(tf)
     ACTIVE_POSE = None
-
-    save_status()
+    POSE_ID = save_status()
 
 def load_pose():
-    load_status()
+
+    to_load = int(raw_input('Which file ID do you want to load?'))
+    load_status(to_load)
     if POSE_LIST:
         plan_pose_srv(POSE_LIST[0], True)
 
@@ -149,9 +172,14 @@ def preview_grid():
 
     plan_joints_srv(current_joints, True)
 
-def run_open_loop(camera_base='tool0'):
+def run_open_loop(use_miscalibrated = False):
 
-    # TODO: Wait for point cloud message, otherwise default to using standard
+    camera_base = 'tool0'
+    if use_miscalibrated:
+        camera_base = 'tool0_false'
+
+    # TODO: Start publishing transforms here to link to the camera
+
     camera_connected = False
     if camera_connected:
         raise NotImplementedError()
@@ -165,9 +193,6 @@ def run_open_loop(camera_base='tool0'):
     tf = retrieve_tf(final_target.header.frame_id, base_frame)
     final_target = do_transform_point(final_target, tf)
 
-    import pdb
-    pdb.set_trace()
-
     final_target_array = pt_to_array(final_target)
     intermediate_array = final_target_array - np.array([0.0, 0.01, 0.04])
 
@@ -178,14 +203,39 @@ def run_open_loop(camera_base='tool0'):
         pt.point = Point(*array)
         waypoints.append(pt)
 
+    file_name = get_file_name(open_loop=True, variant=use_miscalibrated)
+    if file_name is None:
+        print('[!] Warning, your data will not be recorded for this run!')
+    else:
+        record_data_srv(file_name)
+
     response = open_loop_srv(waypoints, fwd_velocity)
     print(response)
 
+    if file_name is not None:
+        stop_record_data_srv()
+    record_success()
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
-def run_closed_loop():
-    pass
+def run_closed_loop(use_nn=False):
+
+    # TODO: BOOT UP THE NN SUBPROCESS
+
+    file_name = get_file_name(open_loop=False, variant=not use_nn)
+    if file_name is None:
+        print('[!] Warning, your data will not be recorded for this run!')
+    else:
+        record_data_srv(file_name)
+
+    # TODO: DO STUFF
+
+    if file_name is not None:
+        stop_record_data_srv()
+    record_success()
+    raw_input('Servoing done! Press Enter to rewind...')
+    servo_rewind()
+
 
 class StopProgramException(Exception):
     pass
@@ -206,20 +256,23 @@ if __name__ == '__main__':
     plan_pose_srv = rospy.ServiceProxy('plan_pose', HandlePosePlan)
     plan_joints_srv = rospy.ServiceProxy('plan_joints', HandleJointPlan)
     open_loop_srv = rospy.ServiceProxy('servo_waypoints', ServoWaypoints)
+    record_data_srv = rospy.ServiceProxy('record_data', RecordData)
+    stop_record_data_srv = rospy.ServiceProxy('stop_record_data', Empty)
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
 
     rospy.sleep(1.0)
 
     actions = [
+        ('Quit', stop_program),
         ('Set the active pose', set_active_pose),
         ('Load the previous active pose', load_pose),
         ('Move to next pose', next_pose),
-        ('Freedrive to a new pose', freedrive),
+        # ('Freedrive to a new pose', freedrive),
         ('Level the existing pose', level_pose),
         ('Preview target grid', preview_grid),
         ('Run open loop controller', run_open_loop),
         ('Run closed loop controller', run_closed_loop),
-        ('Quit', stop_program)
+
     ]
 
 
@@ -229,10 +282,16 @@ if __name__ == '__main__':
         if not POSE_LIST:
             status = 'Pose list has not been generated.'
         else:
-            if ACTIVE_POSE is None:
-                status = 'Currently not at given pose in the pose list.'
+            if POSE_ID is None:
+                prefix = '(UNSAVED POSE)'
             else:
-                status = 'Currently at pose {} out of {}.'.format(ACTIVE_POSE + 1, len(POSE_LIST))
+                prefix = 'Pose {}'.format(POSE_ID)
+
+            if ACTIVE_POSE is None:
+                status = '{}: Currently not at given pose in the pose list.'.format(prefix)
+            else:
+                status = '{}: Currently at pose {} out of {}.'.format(prefix, ACTIVE_POSE + 1, len(POSE_LIST))
+
 
         msg = "What would you like to do?\n{}\n{}\nType action here: ".format(status, checklist)
 
