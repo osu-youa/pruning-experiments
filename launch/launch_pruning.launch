@@ -27,6 +27,7 @@
     <node name="pose_publisher" pkg="pruning_experiments" type="pose_publisher.py" output="screen" />
     <node name="open_loop_control_manager" pkg="pruning_experiments" type="open_loop_control.py" output="screen" />
     <node name="control_manager" pkg="pruning_experiments" type="control_manager.py" output="screen" />
+    <node name="record_data" pkg="pruning_experiments" type="record_data.py" output="screen" />
 
 
 
