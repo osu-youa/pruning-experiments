@@ -17,5 +17,14 @@
 <node pkg="pruning_imp_ctlr" name="contact_server" type="contact_server.py" output="screen">
 </node>
 
+<node name="wrench_plot"
+    pkg="rqt_plot"
+    type="rqt_plot"
+    args="/wrench_filtered/wrench/force/y /wrench_filtered/wrench/force/z" >
+</node>
+
+<node name="vel_command_plot" pkg="rqt_plot" type="rqt_plot" 
+    args="/vel_command/vector/y /vel_from_acc/vector/y" >
+</node>
 
 </launch>

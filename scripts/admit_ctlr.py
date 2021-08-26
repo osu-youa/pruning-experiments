@@ -4,7 +4,7 @@
 #
 # Pruning project: subscribes to wrench data from UR5 and publishes control velocities to cut a branch
 #
-# Last modified 8/19/2021 by Hannah
+# Last modified 8/25/2021 by Hannah
 
 import rospy
 import sys
@@ -24,6 +24,7 @@ class AdmitCtlr():
         self.wrench_sub = rospy.Subscriber('/wrench_filtered', WrenchStamped, self.wrench_callback)
         # Publish velocities to robot
         self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
+        self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
 	    # Set up servoing services
         if is_connected:
     	    servo_activate = rospy.ServiceProxy('/servo_activate', Empty)
@@ -32,8 +33,9 @@ class AdmitCtlr():
         # Set up parameters
         # Desired (reference) wrench
         self.des_wrench = np.array([0, 0, 0, 0, 0, -1.5])
-        # Controller gain 
-        self.Kf = .05
+        # Controller gains 
+        self.Kf = .05 # M
+        self.Kd = .05 # D (or B, but the damping term)
         # Selection matrix
         self.l = np.diag([1, 0, 0, 0, 1, 1])
         # Velocity limit
@@ -41,7 +43,7 @@ class AdmitCtlr():
         # Deadband (for wrench)
         self.f_thresh = 0.25 # 0.2 N (will ignore anything < .2N)
         self.last_dirs = ["stopped", "stopped"]
-	self.last_stop_condition = False
+        self.last_stop_condition = False
         self.is_connected  = is_connected
 
         self.stop_force_thresh = 0.25
@@ -62,7 +64,7 @@ class AdmitCtlr():
         If the wrench is within desired parameters, stop servoing the robot.
         '''
         w_diff = self.des_wrench-wrench_vec
-	# rospy.loginfo("moment diff = %0.4f; force y diff: %0.3f", w_diff[0], w_diff[4])
+	    # rospy.loginfo("moment diff = %0.4f; force y diff: %0.3f", w_diff[0], w_diff[4])
 
         #if -stop_f < w_diff[4] < stop_f:
         #    y_good = True
@@ -152,20 +154,32 @@ class AdmitCtlr():
         rospy.logdebug('New wrench. \n Y force: {0} \n Z force: {1} \n X moment: {2}'.format(wrench_vec[4], wrench_vec[5], wrench_vec[0]))
         
         # Admittance controller 
-        vel_des = -self.Kf*np.dot(self.l,self.des_wrench-self.deadzone(wrench_vec))
+        acc_des_force_term = -self.Kf*np.dot(self.l,self.des_wrench-self.deadzone(wrench_vec))
+        acc_des_damp_term = -self.Kf*self.Kd*-self.vel_prev
 
+        vel_des_og = acc_des_force_term
+        vel_des_acc = self.vel_prev + (1/500)*(acc_des_force_term+acc_des_damp_term)
+
+        self.vel_prev = np.array([0, 0, 0, 0, vel_des_acc[4], vel_des_acc[5]])
         # Impose the velocity limit
-        vel_y_limited = self.impose_vel_limit(vel_des[4])
-        vel_z_limited = self.impose_vel_limit(vel_des[5])
+        vel_y_limited_og = self.impose_vel_limit(vel_des_og[4])
+        vel_z_limited_og = self.impose_vel_limit(vel_des_og[5])
+
+        vel_y_limited_acc = self.impose_vel_limit(vel_des_acc[4])
+        vel_z_limited_acc = self.impose_vel_limit(vel_des_acc[5])
 	
         # Set up and publish the velocity command
         self.vel.header.stamp = rospy.Time.now()
-        self.vel.vector = Vector3(0.0, vel_y_limited, vel_z_limited)
+        self.vel.vector = Vector3(0.0, vel_y_limited_og, vel_z_limited_og)
         self.vel_pub.publish(self.vel)
         rospy.logdebug("Published vels: \n {}".format(self.vel.vector))
 
+        vel2 = self.vel
+        vel2.vector = Vector3(0.0, vel_y_limited_acc, vel_z_limited_acc)
+        self.vel_pub_acc.publish(self.vel)
+
         # Display human-readable controller directions to the terminal
-        self.show_ctlr_direction(vel_y_limited, vel_z_limited)
+        self.show_ctlr_direction(vel_y_limited_og, vel_z_limited_og)
         
         # rospy.loginfo("checking wrench state: {}".format(wrench_vec))
         #Check for the stop condition
