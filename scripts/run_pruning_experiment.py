@@ -11,7 +11,7 @@ from itertools import product
 from tf2_geometry_msgs import do_transform_point
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, PointCloud2
 from std_srvs.srv import Empty
 import cPickle as pickle
 from pruning_experiments.srv import ServoWaypoints
@@ -151,10 +151,19 @@ def preview_grid():
 
 def run_open_loop(camera_base='tool0'):
 
-    # TODO: Wait for point cloud message, otherwise default to using standard
     camera_connected = False
+    try:
+        rospy.wait_for_message('/camera/depth_registered/points', PointCloud2, timeout=1.0)
+        camera_connected = True
+    except:
+        pass
+
     if camera_connected:
-        raise NotImplementedError()
+        print('Please click on a point in RViz to go to! (Waiting 30 seconds')
+        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=30.0)
+        rospy.logwarn('TEMPORARILY REPLACING THE CAMERA FRAME')
+        final_target.header.frame_id = 'tool0'
+
     else:
         # If no camera is connected, just run a test motion
         print('No camera connected! Running test motion...')
@@ -162,21 +171,19 @@ def run_open_loop(camera_base='tool0'):
         final_target.header.frame_id = tool_frame
         final_target.point = Point(0.0, -0.05, 0.15)
 
-    tf = retrieve_tf(final_target.header.frame_id, base_frame)
-    final_target = do_transform_point(final_target, tf)
-
-    import pdb
-    pdb.set_trace()
-
     final_target_array = pt_to_array(final_target)
-    intermediate_array = final_target_array - np.array([0.0, 0.01, 0.04])
+    if np.linalg.norm(final_target_array) > 0.4:
+        rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want? (y/n)')
+    intermediate_array = final_target_array - np.array([0.0, -0.01, 0.05])
 
+    tf = retrieve_tf(final_target.header.frame_id, base_frame)
     waypoints = []
     for array in [intermediate_array, final_target_array]:
         pt = PointStamped()
-        pt.header.frame_id = base_frame
+        pt.header.frame_id = final_target.header.frame_id
         pt.point = Point(*array)
-        waypoints.append(pt)
+        tfed_pt = do_transform_point(pt, tf)
+        waypoints.append(tfed_pt)
 
     response = open_loop_srv(waypoints, fwd_velocity)
     print(response)
