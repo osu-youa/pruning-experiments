@@ -17,7 +17,9 @@ def handle_servo_request(req):
     vel = req.vel
     servo_start()
     global ABORT
+    global CONTACT
     ABORT = False
+    CONTACT = False
 
     aborted = False
     try:
@@ -29,7 +31,7 @@ def handle_servo_request(req):
         servo_stop()
     return aborted
 
-def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001):
+def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001, respond_to_contact=False):
 
     start_pt = last_pt.copy()
     goal_pt = pt_to_array(pt)
@@ -43,6 +45,9 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001)
         if ABORT:
             command_vec = np.zeros(3)
             aborted = True
+            done = True
+        elif CONTACT:
+            command_vec = np.zeros(3)
             done = True
         else:
             command_vec = goal_pt - last_pt
@@ -62,6 +67,9 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001)
         vec.header.frame_id = 'base_link'
         vec.vector = Vector3(*command_vec)
         vel_pub.publish(vec)
+
+    if not aborted and CONTACT:
+        aborted = run_contact_controller()
 
     return aborted
 
@@ -87,13 +95,21 @@ def handle_abort(msg):
     global ABORT
     ABORT = abort
 
+def handle_contact(msg):
+    contact = msg.data
+    global CONTACT
+    CONTACT = contact
+
 if __name__ == '__main__':
     rospy.init_node('open_loop_manager')
     servo_start = rospy.ServiceProxy('servo_activate', Empty)
     servo_stop = rospy.ServiceProxy('servo_stop', Empty)
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
+    run_contact_controller = lambda: False    # Dummy
+
     rospy.Subscriber('tool_pose', PoseStamped, update_pose, queue_size=1)
     rospy.Subscriber('abort', Bool, handle_abort, queue_size=1)
+    rospy.Subscriber('contact', Bool, handle_contact, queue_size=1)
     vel_pub = rospy.Publisher('vel_command', Vector3Stamped, queue_size=1)
     rospy.sleep(1.0)
 

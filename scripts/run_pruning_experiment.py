@@ -16,6 +16,7 @@ from std_srvs.srv import Empty
 import cPickle as pickle
 from pruning_experiments.srv import ServoWaypoints, RecordData
 from functools import partial
+import subprocess, shlex
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
@@ -23,6 +24,7 @@ POSE_ID = None
 POSE_LIST = []
 ACTIVE_POSE = None
 
+INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
 
 # ==========
 # UTILS
@@ -188,14 +190,7 @@ def preview_grid():
 
     plan_joints_srv(current_joints, True)
 
-def run_open_loop(use_miscalibrated = False):
-
-    camera_base = 'tool0'
-    if use_miscalibrated:
-        camera_base = 'tool0_false'
-
-    # TODO: Start publishing transforms here to link to the camera
-
+def get_camera_point_if_connected():
     camera_connected = False
     try:
         rospy.wait_for_message('/camera/depth_registered/points', PointCloud2, timeout=1.0)
@@ -216,10 +211,21 @@ def run_open_loop(use_miscalibrated = False):
         final_target.header.frame_id = tool_frame
         final_target.point = Point(0.0, -0.05, 0.15)
 
+    return final_target
+
+def run_open_loop(use_miscalibrated = False):
+
+    camera_base = 'tool0'
+    if use_miscalibrated:
+        camera_base = 'tool0_false'
+
+    # TODO: Start publishing transforms here to link to the camera
+
+    final_target = get_camera_point_if_connected()
     final_target_array = pt_to_array(final_target)
     if np.linalg.norm(final_target_array) > 0.4:
-        rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want? (y/n)')
-    intermediate_array = final_target_array - np.array([0.0, 0.01, 0.05])
+        rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
+    intermediate_array = final_target_array - INTERMEDIATE_OFFSET
 
     tf = retrieve_tf(final_target.header.frame_id, base_frame)
     waypoints = []
@@ -236,7 +242,7 @@ def run_open_loop(use_miscalibrated = False):
     else:
         record_data_srv(file_name)
 
-    response = open_loop_srv(waypoints, fwd_velocity).code
+    response = open_loop_srv(waypoints, fwd_velocity, False).code
     if file_name is not None:
         stop_record_data_srv()
         record_success(file_name, auto_failure=response)
@@ -244,20 +250,50 @@ def run_open_loop(use_miscalibrated = False):
     servo_rewind()
 
 def run_closed_loop(use_nn=False):
-
-    # TODO: BOOT UP THE NN SUBPROCESS
-
     file_name = get_file_name(open_loop=False, variant=not use_nn)
-    if file_name is None:
-        print('[!] Warning, your data will not be recorded for this run!')
-    else:
-        record_data_srv(file_name)
+    if use_nn:
+        if file_name is None:
+            print('[!] Warning, your data will not be recorded for this run!')
+        else:
+            record_data_srv(file_name)
 
-    # TODO: DO STUFF
+        code = subprocess.check_output(shlex.split('rosrun pruning_experiments velocity_command_client.py')).strip()
+        if code == str(-1):
+            rospy.logerr("Neural network failed to start!")
+        else:
+            code = int(code)
+            print(code)
+
+    else:
+        # Find the intermediate point and target a straight line
+        final_target = get_camera_point_if_connected()
+        final_target_array = pt_to_array(final_target)
+        if np.linalg.norm(final_target_array) > 0.4:
+            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
+        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+        tf = retrieve_tf(final_target.header.frame_id, base_frame)
+
+        pt = PointStamped()
+        pt.header.frame_id = final_target.header.frame_id
+        pt.point = Point(*intermediate_array)
+        tfed_pt = do_transform_point(pt, tf)
+        intermediate_world = pt_to_array(tfed_pt)
+        cutter_world = pt_to_array(rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0).pose.position)
+        movement_vec = (intermediate_world - cutter_world)
+        movement_vec /= np.linalg.norm(movement_vec)
+        actual_target = intermediate_world + 0.04 * movement_vec
+        tfed_pt.point = Point(*actual_target)
+        waypoints = [tfed_pt]
+
+        if file_name is None:
+            print('[!] Warning, your data will not be recorded for this run!')
+        else:
+            record_data_srv(file_name)
+        response = open_loop_srv(waypoints, fwd_velocity, False).code
 
     if file_name is not None:
         stop_record_data_srv()
-        record_success(file_name)
+        record_success(file_name, auto_failure=response)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
@@ -296,8 +332,9 @@ if __name__ == '__main__':
         ('Level the existing pose', level_pose),
         ('Preview target grid', preview_grid),
         ('Run open loop controller', run_open_loop),
-        ('Run closed loop controller', run_closed_loop),
-
+        ('Run open loop controller miscalibrated', partial(run_open_loop, use_miscalibrated=True)),
+        ('Run simple closed loop controller', run_closed_loop),
+        ('Run NN closed loop controller', partial(run_closed_loop, use_nn=True)),
     ]
 
 
@@ -318,7 +355,7 @@ if __name__ == '__main__':
                 status = '{}: Currently at pose {} out of {}.'.format(prefix, ACTIVE_POSE + 1, len(POSE_LIST))
 
 
-        msg = "What would you like to do?\n{}\n{}\nType action here: ".format(status, checklist)
+        msg = "What would you like to do?\n\n{}\n\n{}\n\nType action here: ".format(status, checklist)
 
         try:
             action = int(raw_input(msg))
