@@ -24,7 +24,7 @@ if __name__ == '__main__':
     sock.connect(address)
     rospy.loginfo('Connected to socket at {}:{}!'.format(*address))
 
-    pub = rospy.Publisher('/vel_command', Vector3Stamped)
+    pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=1)
 
     while not rospy.is_shutdown():
         data = np.zeros(0)

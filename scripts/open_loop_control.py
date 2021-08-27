@@ -28,13 +28,15 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001)
     init_approach_vec = start_pt - goal_pt
     init_approach_vec = init_approach_vec / np.linalg.norm(init_approach_vec)
 
-    while True:
+    done = False
+    while not done:
         command_vec = goal_pt - last_pt
         current_dist = -command_vec.dot(init_approach_vec)
         command_vec /= np.linalg.norm(command_vec)
 
         if current_dist < stop_thres:
-            break
+            command_vec = np.zeros(3)
+            done = True
         elif current_dist > slow_thres:
             command_vec *= vel
         else:

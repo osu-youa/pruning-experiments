@@ -32,10 +32,22 @@ def get_file_name(open_loop=False, variant=False):
     if ACTIVE_POSE is None:
         return None
     identifier = open_loop * 2 + variant
-    return 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE)
+    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE))
 
-def record_success():
-    print('[TODO]')
+def record_success(file_name):
+
+    with open(file_name, 'rb') as fh:
+        data = pickle.load(fh)
+
+    dist = None
+    in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
+    if in_cutter:
+        dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+
+    data['success'] = in_cutter
+    data['dist'] = dist
+    with open(file_name, 'wb') as fh:
+        pickle.dump(data, fh)
 
 def tf_to_pose(tf, keep_header=False):
     header = None
@@ -131,7 +143,7 @@ def set_active_pose():
 
 def load_pose():
 
-    to_load = int(raw_input('Which file ID do you want to load?'))
+    to_load = int(raw_input('Which file ID do you want to load? '))
     load_status(to_load)
     if POSE_LIST:
         plan_pose_srv(POSE_LIST[0], True)
@@ -203,7 +215,7 @@ def run_open_loop(use_miscalibrated = False):
     final_target_array = pt_to_array(final_target)
     if np.linalg.norm(final_target_array) > 0.4:
         rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want? (y/n)')
-    intermediate_array = final_target_array - np.array([0.0, -0.01, 0.05])
+    intermediate_array = final_target_array - np.array([0.0, 0.01, 0.05])
 
     tf = retrieve_tf(final_target.header.frame_id, base_frame)
     waypoints = []
@@ -225,7 +237,7 @@ def run_open_loop(use_miscalibrated = False):
 
     if file_name is not None:
         stop_record_data_srv()
-    record_success()
+        record_success(file_name)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
@@ -243,7 +255,7 @@ def run_closed_loop(use_nn=False):
 
     if file_name is not None:
         stop_record_data_srv()
-    record_success()
+        record_success(file_name)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
