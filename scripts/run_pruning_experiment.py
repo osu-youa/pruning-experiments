@@ -34,15 +34,19 @@ def get_file_name(open_loop=False, variant=False):
     identifier = open_loop * 2 + variant
     return os.path.join(data_folder, 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE))
 
-def record_success(file_name):
+def record_success(file_name, auto_failure=False):
 
     with open(file_name, 'rb') as fh:
         data = pickle.load(fh)
-
-    dist = None
-    in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
-    if in_cutter:
-        dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+    if auto_failure:
+        in_cutter = False
+        dist = None
+        print('Run was aborted, marking cutter/distance as a failure...')
+    else:
+        dist = None
+        in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
+        if in_cutter:
+            dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
 
     data['success'] = in_cutter
     data['dist'] = dist
@@ -232,12 +236,10 @@ def run_open_loop(use_miscalibrated = False):
     else:
         record_data_srv(file_name)
 
-    response = open_loop_srv(waypoints, fwd_velocity)
-    print(response)
-
+    response = open_loop_srv(waypoints, fwd_velocity).code
     if file_name is not None:
         stop_record_data_srv()
-        record_success(file_name)
+        record_success(file_name, auto_failure=response)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
