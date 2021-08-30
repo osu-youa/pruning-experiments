@@ -9,7 +9,7 @@ from geometry_msgs.msg import Vector3Stamped, Vector3, TransformStamped, Transfo
 from tf2_ros import TransformListener as TransformListener2, Buffer
 from itertools import product
 from tf2_geometry_msgs import do_transform_point
-from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from tf.transformations import euler_from_quaternion, quaternion_from_euler, euler_from_matrix, euler_matrix
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState, PointCloud2
 from std_srvs.srv import Empty
@@ -17,6 +17,7 @@ import cPickle as pickle
 from pruning_experiments.srv import ServoWaypoints, RecordData
 from functools import partial
 import subprocess, shlex
+from contextlib import contextmanager
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
@@ -25,10 +26,21 @@ POSE_LIST = []
 ACTIVE_POSE = None
 
 INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
+STANDARD_CAMERA_POS = np.array([0.0719, 0.07416, -0.0050 + 0.031 - 0.0248/2])
+STANDARD_CAMERA_ROT = np.array([0, -np.radians(30), 0])
 
 # ==========
 # UTILS
 # ==========
+
+@contextmanager
+def subprocess_manager(subproc_msg):
+    args = shlex.split(subproc_msg)
+    resource = subprocess.Popen(args, stderr=subprocess.PIPE, shell=False)
+    try:
+        yield resource
+    finally:
+        resource.terminate()
 
 def get_file_name(open_loop=False, variant=False):
     if ACTIVE_POSE is None:
@@ -201,8 +213,6 @@ def get_camera_point_if_connected():
     if camera_connected:
         print('Please click on a point in RViz to go to! (Waiting 30 seconds')
         final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=30.0)
-        rospy.logwarn('TEMPORARILY REPLACING THE CAMERA FRAME')
-        final_target.header.frame_id = 'tool0'
 
     else:
         # If no camera is connected, just run a test motion
@@ -213,21 +223,37 @@ def get_camera_point_if_connected():
 
     return final_target
 
+def get_camera_tf(noise=None):
+    pos = list(STANDARD_CAMERA_POS)
+
+    rot_mat = euler_matrix(*STANDARD_CAMERA_ROT)[:3,:3]
+    adjustment_mat = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    final_euler = euler_from_matrix(rot_mat.dot(adjustment_mat))
+    quat = list(quaternion_from_euler(*final_euler))
+    return ' '.join(['{}'] * 7).format(*pos + quat)
+
 def run_open_loop(use_miscalibrated = False):
 
-    camera_base = 'tool0'
     if use_miscalibrated:
-        camera_base = 'tool0_false'
+        noise = None
+    else:
+        noise = None
 
-    # TODO: Start publishing transforms here to link to the camera
+    tf_str = get_camera_tf(noise=noise)
+    with subprocess_manager('rosrun tf static_transform_publisher {} tool0 camera_link 10'.format(tf_str)):
 
-    final_target = get_camera_point_if_connected()
-    final_target_array = pt_to_array(final_target)
-    if np.linalg.norm(final_target_array) > 0.4:
-        rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
-    intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+        final_target = get_camera_point_if_connected()
+        if final_target.header.frame_id != tool_frame:
+            tf = retrieve_tf(final_target.header.frame_id, tool_frame)
+            final_target = do_transform_point(final_target, tf)
 
-    tf = retrieve_tf(final_target.header.frame_id, base_frame)
+        final_target_array = pt_to_array(final_target)
+
+        if np.linalg.norm(final_target_array) > 0.4:
+            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
+        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+
+        tf = retrieve_tf(final_target.header.frame_id, base_frame)
     waypoints = []
     for array in [intermediate_array, final_target_array]:
         pt = PointStamped()
