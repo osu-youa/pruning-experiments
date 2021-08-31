@@ -23,7 +23,7 @@ class AdmitCtlr():
         # Subscribe to wrist wrench topic
         self.wrench_sub = rospy.Subscriber('/wrench_filtered', WrenchStamped, self.wrench_callback)
         # Publish velocities to robot
-        self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
+        self.vel_pub = rospy.Publisher('/vel_proxy', Vector3Stamped, queue_size=5)
         # self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
 
 	    # Set up servoing services
@@ -47,7 +47,7 @@ class AdmitCtlr():
         self.last_stop_condition = False
         self.is_connected  = is_connected
 
-        self.stop_force_thresh = 0.2
+        self.stop_force_thresh = 0.25
         self.stop_torque_thresh = 0.005
         self.publish_freq = 500.0
 
@@ -56,6 +56,9 @@ class AdmitCtlr():
         self.vel.header.stamp = rospy.Time.now()
         self.vel.header.frame_id = 'tool0_controller'
         self.vel.vector = Vector3(0.0, 0.0, 0.0)
+
+        # Set up variables for end condition watching
+        self.last_goal_checks = np.zeros(10)
         
         if is_connected:
             servo_activate()
@@ -67,30 +70,38 @@ class AdmitCtlr():
         If the wrench is within desired parameters, stop servoing the robot.
         '''
         w_diff = self.des_wrench-wrench_vec
+	    # rospy.loginfo("moment diff = %0.4f; force y diff: %0.3f", w_diff[0], w_diff[4])
+
+        w_diff = self.des_wrench-wrench_vec
         slow_f = 1.5*stop_f
         
         if -slow_f < w_diff[4] < slow_f and -slow_f < w_diff[5] < slow_f and -slow_f < w_diff[0] < slow_f:
             rospy.loginfo("close to goal state \n")
             rospy.loginfo("moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
 
+        # Check if the forces are within the stop condition threshold, add 1 to queue, else a 0
         if -stop_f < w_diff[4] < stop_f and -stop_f < w_diff[5] < stop_f and -stop_m < w_diff[0] < stop_m:
             stop_cond = True
-            #rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-            if self.is_connected:
-               	self.servo_stop()
+            self.last_goal_checks = np.append(self.last_goal_checks, 1)
+            rospy.loginfo("stop conditions met this step; may stop robot")
         else:
             stop_cond = False
-	    	#rospy.loginfo("conditions not met")
+            self.last_goal_checks = np.append(self.last_goal_checks, 0)
+        
+        # Get rid of least recent queue
+        self.last_goal_checks = np.delete(self.last_goal_checks, 0)
 
+        # Print whether the stop condition was met
         if stop_cond != self.last_stop_condition:
-            if stop_cond == True:
-                rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-                rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-                rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-                rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-                rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
-            else:
-                rospy.loginfo("conditions not met; running")
+            if stop_cond == False:
+                rospy.loginfo("conditions not met this step; running")
+
+        # If the last 10 steps met conditions more than 5 times, stop robot
+        if np.sum(self.last_goal_checks) > 5:
+            rospy.loginfo("CONDITIONS MET; STOPPING ROBOT!!!")
+            if self.is_connected:
+                self.servo_stop()
+
         self.last_stop_condition = stop_cond
 
     def deadzone(self, wrench_in):
@@ -157,7 +168,7 @@ class AdmitCtlr():
         
         # Admittance controller terms
         # acceleration due to force (M-1 * force_des-force_actual)
-        acc_des_force_term = -self.Kf*np.dot(self.l,self.des_wrench-self.deadzone(wrench_vec))
+        acc_des_force_term = -self.Kf*np.dot(self.l,self.deadzone(self.des_wrench-(wrench_vec)))
         # acceleration due to damping (M-1 * B * x')
         acc_des_damp_term = -self.Kf*self.Kd*self.vel_prev
 
