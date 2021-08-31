@@ -11,7 +11,7 @@ import sys
 import numpy as np
 
 from geometry_msgs.msg import Wrench, Vector3Stamped, Vector3, WrenchStamped
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
 
 class AdmitCtlr():
 
@@ -24,26 +24,34 @@ class AdmitCtlr():
         self.wrench_sub = rospy.Subscriber('/wrench_filtered', WrenchStamped, self.wrench_callback)
         # Publish velocities to robot
         self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
-        
-	    # Set up servoing services
+
+        self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
+        # Set up servoing services
+
+        rospy.Service("run_admittance_controller", Trigger, self.handle_run_controller)
+        self.activated = False
+
         if is_connected:
-    	    servo_activate = rospy.ServiceProxy('/servo_activate', Empty)
+            servo_activate = rospy.ServiceProxy('/servo_activate', Empty)
             self.servo_stop = rospy.ServiceProxy('/servo_stop', Empty)
 
         # Set up parameters
         # Desired (reference) wrench
         self.des_wrench = np.array([0, 0, 0, 0, 0, -1.5])
         # Controller gains 
+
         self.Kf = .05 # M
         self.Kd = 200 # D (or B, but the damping term)
+
         # Selection matrix
         self.l = np.diag([1, 0, 0, 0, 1, 1])
         # Velocity limit
-        self.vel_lim = 0.01 # 1 cm/s
+        self.vel_lim = 0.01  # 1 cm/s
         # Deadband (for wrench)
-        self.f_thresh = 0.25 # 0.2 N (will ignore anything < .2N)
+        self.f_thresh = 0.25  # 0.2 N (will ignore anything < .2N)
         self.last_dirs = ["stopped", "stopped"]
         self.last_stop_condition = False
+
         self.global_done = False
         self.is_connected  = is_connected
 
@@ -59,11 +67,32 @@ class AdmitCtlr():
 
         # set up variables for end condition watching
         self.last_goal_checks = np.zeros(10)
-        
+
         if is_connected:
             servo_activate()
-	    
+
         rospy.loginfo("Finished initializing admit ctlr node.")
+
+
+    def handle_run_controller(self, *_, **__):
+
+        self.activated = True
+        self.global_done = False
+        start_time = rospy.Time.now()
+        rate = rospy.Rate(100)
+        try:
+            while True:
+                if self.global_done:
+                    return_msg = (True, "")
+                    break
+                if (rospy.Time.now() - start_time).to_sec() > 10.0:
+                    return_msg = (False, "Timeout")
+                    break
+                rate.sleep()
+        finally:
+            self.activated = False
+
+        return return_msg
 
     def check_goal_state(self, wrench_vec):
         '''
@@ -109,7 +138,7 @@ class AdmitCtlr():
         wrench_out = wrench_in.copy()
         for ind, f_in in enumerate(wrench_in):
             if f_in > self.f_thresh:
-                f_out = f_in-self.f_thresh
+                f_out = f_in - self.f_thresh
             elif f_in < -self.f_thresh:
                 f_out = f_in + self.f_thresh
             else:
@@ -124,7 +153,7 @@ class AdmitCtlr():
             output_vel = -self.vel_lim
         else:
             output_vel = vel
-        return output_vel 
+        return output_vel
 
     def show_ctlr_direction(self, vely, velz):
         '''
@@ -132,20 +161,20 @@ class AdmitCtlr():
         '''
         # Check vertical direction
         if vely > 0:
-	        dir1_text = "up"
+            dir1_text = "up"
         elif vely < 0:
             dir1_text = "down"
         else:
-	        dir1_text = "stopped"
+            dir1_text = "stopped"
 
         # Check forward/backward direction
         if velz > 0:
-	        dir2_text = "forward"
+            dir2_text = "forward"
         elif velz < 0:
-	        dir2_text = "backward"
+            dir2_text = "backward"
         else:
             dir2_text = "stopped"
-        
+
         these_dirs = [dir1_text, dir2_text]
 
         if not these_dirs == self.last_dirs:
@@ -181,6 +210,7 @@ class AdmitCtlr():
         self.vel.header.stamp = rospy.Time.now()
         self.vel.vector = Vector3(0.0, vel_y_limited, vel_z_limited)
         self.vel_pub.publish(self.vel)
+
         rospy.logdebug("Published vels: \n {}".format(self.vel.vector))
 
         # Display human-readable controller directions to the terminal
@@ -190,7 +220,6 @@ class AdmitCtlr():
         self.check_goal_state(wrench_vec)
 
 if __name__ == '__main__':
-
     # Initialize node
     rospy.init_node('admit_ctlr', argv=sys.argv)
 

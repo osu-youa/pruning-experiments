@@ -1,0 +1,5 @@
+geometry_msgs/PointStamped[] points
+float64 vel
+bool use_contact
+---
+int64 code

@@ -9,21 +9,63 @@ from geometry_msgs.msg import Vector3Stamped, Vector3, TransformStamped, Transfo
 from tf2_ros import TransformListener as TransformListener2, Buffer
 from itertools import product
 from tf2_geometry_msgs import do_transform_point
-from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from tf.transformations import euler_from_quaternion, quaternion_from_euler, euler_from_matrix, euler_matrix
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, PointCloud2
+from std_srvs.srv import Empty, Trigger
 import cPickle as pickle
+from pruning_experiments.srv import ServoWaypoints, RecordData
+from functools import partial
+import subprocess, shlex
+from contextlib import contextmanager
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
-base_frame = 'base_link'
-tool_frame = 'tool0'
+fwd_velocity = 0.03
+POSE_ID = None
 POSE_LIST = []
 ACTIVE_POSE = None
 
+INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
+STANDARD_CAMERA_POS = np.array([0.0719, 0.07416, -0.0050 + 0.031 - 0.0248/2])
+STANDARD_CAMERA_ROT = np.array([0, -np.radians(30), 0])
 
 # ==========
 # UTILS
 # ==========
+
+@contextmanager
+def subprocess_manager(subproc_msg):
+    args = shlex.split(subproc_msg)
+    resource = subprocess.Popen(args, stderr=subprocess.PIPE, shell=False)
+    try:
+        yield resource
+    finally:
+        resource.terminate()
+
+def get_file_name(open_loop=False, variant=False):
+    if ACTIVE_POSE is None:
+        return None
+    identifier = open_loop * 2 + variant
+    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE))
+
+def record_success(file_name, auto_failure=False):
+
+    with open(file_name, 'rb') as fh:
+        data = pickle.load(fh)
+    if auto_failure:
+        in_cutter = False
+        dist = None
+        print('Run was aborted, marking cutter/distance as a failure...')
+    else:
+        dist = None
+        in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
+        if in_cutter:
+            dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+
+    data['success'] = in_cutter
+    data['dist'] = dist
+    with open(file_name, 'wb') as fh:
+        pickle.dump(data, fh)
 
 def tf_to_pose(tf, keep_header=False):
     header = None
@@ -44,6 +86,12 @@ def tf_to_pose(tf, keep_header=False):
     pose_stamped.pose = pose
     pose_stamped.header = header
     return pose_stamped
+
+def pt_to_array(pt):
+    if isinstance(pt, PointStamped):
+        pt = pt.point
+
+    return np.array([pt.x, pt.y, pt.z])
 
 def retrieve_tf(base_frame, target_frame, stamp = rospy.Time()):
 
@@ -73,18 +121,28 @@ def save_status():
         'poses': POSE_LIST,
         'active_pose': None,
     }
-    with open(os.path.join(data_folder, 'status.pickle'), 'wb') as fh:
-        pickle.dump(output, fh)
+    counter = 0
+    while True:
+        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(counter))
+        if os.path.exists(file):
+            counter += 1
+            continue
+        with open(file, 'wb') as fh:
+            pickle.dump(output, fh)
+        return counter
 
-def load_status():
+def load_status(pose_id):
+    file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
     try:
-        with open(os.path.join(data_folder, 'status.pickle'), 'rb') as fh:
+        with open(file, 'rb') as fh:
             rez = pickle.load(fh)
     except IOError:
-        print('No poses have been saved!')
+        print('No such pose exists!')
         return
+    global POSE_ID
     global POSE_LIST
     global ACTIVE_POSE
+    POSE_ID = pose_id
     POSE_LIST = rez['poses']
     ACTIVE_POSE = rez['active_pose']
 
@@ -95,14 +153,16 @@ def load_status():
 def set_active_pose():
     global POSE_LIST
     global ACTIVE_POSE
+    global POSE_ID
     tf = retrieve_tf(tool_frame, base_frame)
     POSE_LIST = generate_pose_grid(tf)
     ACTIVE_POSE = None
-
-    save_status()
+    POSE_ID = save_status()
 
 def load_pose():
-    load_status()
+
+    to_load = int(raw_input('Which file ID do you want to load? '))
+    load_status(to_load)
     if POSE_LIST:
         plan_pose_srv(POSE_LIST[0], True)
 
@@ -142,11 +202,133 @@ def preview_grid():
 
     plan_joints_srv(current_joints, True)
 
-def run_open_loop():
-    pass
+def get_camera_point_if_connected():
+    camera_connected = False
+    try:
+        rospy.wait_for_message('/camera/depth_registered/points', PointCloud2, timeout=1.0)
+        camera_connected = True
+    except:
+        pass
 
-def run_closed_loop():
-    pass
+    if camera_connected:
+        print('Please click on a point in RViz to go to! (Waiting 30 seconds')
+        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=30.0)
+
+    else:
+        # If no camera is connected, just run a test motion
+        print('No camera connected! Running test motion...')
+        final_target = PointStamped()
+        final_target.header.frame_id = tool_frame
+        final_target.point = Point(0.0, -0.05, 0.15)
+
+    return final_target
+
+def get_camera_tf(noise=None):
+    pos = list(STANDARD_CAMERA_POS)
+
+    rot_mat = euler_matrix(*STANDARD_CAMERA_ROT)[:3,:3]
+    adjustment_mat = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    final_euler = euler_from_matrix(rot_mat.dot(adjustment_mat))
+    quat = list(quaternion_from_euler(*final_euler))
+    return ' '.join(['{}'] * 7).format(*pos + quat)
+
+def run_open_loop(use_miscalibrated = False):
+
+    if use_miscalibrated:
+        noise = None
+    else:
+        noise = None
+
+    tare_force_sensor()
+
+    tf_str = get_camera_tf(noise=noise)
+    with subprocess_manager('rosrun tf static_transform_publisher {} tool0 camera_link 10'.format(tf_str)):
+
+        final_target = get_camera_point_if_connected()
+        if final_target.header.frame_id != tool_frame:
+            tf = retrieve_tf(final_target.header.frame_id, tool_frame)
+            final_target = do_transform_point(final_target, tf)
+
+        final_target_array = pt_to_array(final_target)
+
+        if np.linalg.norm(final_target_array) > 0.4:
+            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
+        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+
+        tf = retrieve_tf(final_target.header.frame_id, base_frame)
+    waypoints = []
+    for array in [intermediate_array, final_target_array]:
+        pt = PointStamped()
+        pt.header.frame_id = final_target.header.frame_id
+        pt.point = Point(*array)
+        tfed_pt = do_transform_point(pt, tf)
+        waypoints.append(tfed_pt)
+
+    file_name = get_file_name(open_loop=True, variant=use_miscalibrated)
+    if file_name is None:
+        print('[!] Warning, your data will not be recorded for this run!')
+    else:
+        record_data_srv(file_name)
+
+    response = open_loop_srv(waypoints, fwd_velocity, False).code
+    if file_name is not None:
+        stop_record_data_srv()
+        record_success(file_name)
+    raw_input('Servoing done! Press Enter to rewind...')
+    servo_rewind()
+
+def run_closed_loop(use_nn=False):
+
+    tare_force_sensor()
+
+    file_name = get_file_name(open_loop=False, variant=not use_nn)
+    if use_nn:
+        if file_name is None:
+            print('[!] Warning, your data will not be recorded for this run!')
+        else:
+            record_data_srv(file_name)
+
+        code = subprocess.check_output(shlex.split('rosrun pruning_experiments velocity_command_client.py')).strip()
+        if code == str(-1):
+            rospy.logerr("Neural network failed to start!")
+        else:
+            code = int(code)
+
+    else:
+        # Find the intermediate point and target a straight line
+        final_target = get_camera_point_if_connected()
+        final_target_array = pt_to_array(final_target)
+        if np.linalg.norm(final_target_array) > 0.4:
+            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
+        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+        tf = retrieve_tf(final_target.header.frame_id, base_frame)
+
+        pt = PointStamped()
+        pt.header.frame_id = final_target.header.frame_id
+        pt.point = Point(*intermediate_array)
+        tfed_pt = do_transform_point(pt, tf)
+        intermediate_world = pt_to_array(tfed_pt)
+        cutter_world = pt_to_array(rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0).pose.position)
+        movement_vec = (intermediate_world - cutter_world)
+        movement_vec /= np.linalg.norm(movement_vec)
+        actual_target = intermediate_world + 0.04 * movement_vec
+        tfed_pt.point = Point(*actual_target)
+        waypoints = [tfed_pt]
+
+        if file_name is None:
+            print('[!] Warning, your data will not be recorded for this run!')
+        else:
+            record_data_srv(file_name)
+        code = open_loop_srv(waypoints, fwd_velocity, True).code
+
+    rospy.loginfo("Return code: {}".format(code))
+
+    if file_name is not None:
+        stop_record_data_srv()
+        record_success(file_name)
+    raw_input('Servoing done! Press Enter to rewind...')
+    servo_rewind()
+
 
 class StopProgramException(Exception):
     pass
@@ -158,29 +340,34 @@ if __name__ == '__main__':
 
     # SETUP
     rospy.init_node('experiment_manager')
+    base_frame = rospy.get_param('base_frame')
+    tool_frame = rospy.get_param('tool_frame')
+
     tf_buffer = Buffer()
     tf_listener = TransformListener2(tf_buffer)
 
     plan_pose_srv = rospy.ServiceProxy('plan_pose', HandlePosePlan)
     plan_joints_srv = rospy.ServiceProxy('plan_joints', HandleJointPlan)
-
+    open_loop_srv = rospy.ServiceProxy('servo_waypoints', ServoWaypoints)
+    record_data_srv = rospy.ServiceProxy('record_data', RecordData)
+    stop_record_data_srv = rospy.ServiceProxy('stop_record_data', Empty)
+    servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
+    tare_force_sensor = rospy.ServiceProxy('/ur_hardware_interface/zero_ftsensor', Trigger)
 
     rospy.sleep(1.0)
 
-
-
-
-
     actions = [
+        ('Quit', stop_program),
         ('Set the active pose', set_active_pose),
         ('Load the previous active pose', load_pose),
         ('Move to next pose', next_pose),
-        ('Freedrive to a new pose', freedrive),
+        # ('Freedrive to a new pose', freedrive),
         ('Level the existing pose', level_pose),
         ('Preview target grid', preview_grid),
         ('Run open loop controller', run_open_loop),
-        ('Run closed loop controller', run_closed_loop),
-        ('Quit', stop_program)
+        ('Run open loop controller miscalibrated', partial(run_open_loop, use_miscalibrated=True)),
+        ('Run simple closed loop controller', run_closed_loop),
+        ('Run NN closed loop controller', partial(run_closed_loop, use_nn=True)),
     ]
 
 
@@ -190,12 +377,18 @@ if __name__ == '__main__':
         if not POSE_LIST:
             status = 'Pose list has not been generated.'
         else:
-            if ACTIVE_POSE is None:
-                status = 'Currently not at given pose in the pose list.'
+            if POSE_ID is None:
+                prefix = '(UNSAVED POSE)'
             else:
-                status = 'Currently at pose {} out of {}.'.format(ACTIVE_POSE + 1, len(POSE_LIST))
+                prefix = 'Pose {}'.format(POSE_ID)
 
-        msg = "What would you like to do?\n{}\n{}\nType action here: ".format(status, checklist)
+            if ACTIVE_POSE is None:
+                status = '{}: Currently not at given pose in the pose list.'.format(prefix)
+            else:
+                status = '{}: Currently at pose {} out of {}.'.format(prefix, ACTIVE_POSE + 1, len(POSE_LIST))
+
+
+        msg = "What would you like to do?\n\n{}\n\n{}\n\nType action here: ".format(status, checklist)
 
         try:
             action = int(raw_input(msg))

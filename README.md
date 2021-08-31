@@ -8,8 +8,6 @@ __admit_ctlr.py__ subscribes to /wrench_filtered and publishes velocity commands
 
 __contact_watcher.py__ subscribes to /wrench_filtered. When it senses contact, it makes a service call to "delcare_contact" (with message MadeContact.srv), at which point it no longer looks for contact. Watching can be reactivated with a service call to "reset_contact" with the argument MadeContact(True), which is counterintuitive and on my list of things to change. 
 
-__contact_server.py__ is the server for the "declare_contact" service. It will not be needed when everything is integrated. 
-
 ## Rosbag Data
 
 There are several rosbag files. They contain /wrench data from experiments. Each are a minute long. 
