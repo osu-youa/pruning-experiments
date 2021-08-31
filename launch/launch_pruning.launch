@@ -1,37 +1,39 @@
 <launch>
 
+    <arg name="sim" default="true" />
 
-    <arg name="ip" default="169.254.174.50" />
+    <arg name="use_cutter" default="false" />
     <arg name="use_camera" default="false" />
 
-    <param name="robot_ip" value="$(arg ip)" />
-    <param name="camera_frame_real" value="camera_frame_real" />
-    <param name="camera_frame_fake" value="camera_frame_fake" />
+    <group unless="$(arg sim)">
+        <param name="extcontrol" value="extcontrol2.urp" />
+    </group>
+
     <param name="base_frame" value="base_link" />
-    <param name="tool_frame" value="cutpoint" />
 
     <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch">
-        <arg name="robot_ip" value="$(arg ip)" />
-        <arg name="robot_description_file" value="$(find pruning_experiments)/launch/robot_upload.launch" />
+        <arg if="$(arg sim)" name="robot_ip" value="localhost" />
+        <arg unless="$(arg sim)" name="robot_ip" value="169.254.174.50" />
+        <arg if="$(arg use_cutter)" name="robot_description_file" value="$(find pruning_experiments)/launch/robot_upload.launch" />
 <!--         <arg unless="$(arg fake_sim)" name="reverse_port" value="29999" /> -->
     </include>
-    <include file="$(find ur5e_cutter_moveit_config)/launch/move_group.launch" />
+    <group if="$(arg use_cutter)">
+        <param name="tool_frame" value="cutpoint" />
+        <include file="$(find ur5e_cutter_moveit_config)/launch/move_group.launch" />
+    </group>
+    <group unless="$(arg use_cutter)">
+        <param name="tool_frame" value="tool0" />
+        <include file="$(find ur5_e_moveit_config)/launch/move_group.launch" />
+    </group>
     <include file="$(find arm_utils)/launch/launch_base.launch" />
 
     <group if="$(arg use_camera)">
         <include file="$(find realsense2_camera)/launch/rs_rgbd.launch" />
     </group>
-    <group unless="$(arg use_camera)">
-        <node name="neural_network_receiver" pkg="pruning_experiments" type="velocity_command_client.py" output="screen" />
-    </group>
 
     <node name="pose_publisher" pkg="pruning_experiments" type="pose_publisher.py" output="screen" />
     <node name="open_loop_control_manager" pkg="pruning_experiments" type="open_loop_control.py" output="screen" />
-    <node name="control_manager" pkg="pruning_experiments" type="control_manager.py" output="screen" />
     <node name="record_data" pkg="pruning_experiments" type="record_data.py" output="screen" />
     <node name="safety_status_monitor" pkg="pruning_experiments" type="safety_status_manager.py" output="screen" />
-
-
-
 
 </launch>
