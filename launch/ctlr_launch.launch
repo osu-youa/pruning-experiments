@@ -17,10 +17,10 @@
     </node>
 
     <!-- Takes /wrench_filtered messages and sends velocity commands to /vel_command -->
-    <!-- <node pkg="pruning_experiments" name="admit_ctlr" type="admit_ctlr.py" output="screen">
-    </node> -->
-    <node pkg="pruning_experiments" name="admit_dz_ctlr" type="admit_dz_ctlr.py" output="screen">
+    <node pkg="pruning_experiments" name="admit_ctlr" type="admit_ctlr.py" output="screen">
     </node>
+    <!-- <node pkg="pruning_experiments" name="admit_dz_ctlr" type="admit_dz_ctlr.py" output="screen">
+    </node> -->
 
     <node pkg="pruning_imp_ctlr" name="contact_server" type="contact_server.py" output="screen">
     </node>
@@ -34,7 +34,7 @@
     </node> 
 
     <node name="vel_command_plot" pkg="rqt_plot" type="rqt_plot" 
-        args="/vel_command/vector/z /vel_proxy/vector/z" >
+        args="/vel_command/vector/z /vel_command/vector/y" >
     </node>
 
 <!-- ________________________________________________________________________________ -->
