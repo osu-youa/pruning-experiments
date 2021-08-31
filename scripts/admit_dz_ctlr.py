@@ -23,7 +23,7 @@ class AdmitCtlr():
         # Subscribe to wrist wrench topic
         self.wrench_sub = rospy.Subscriber('/wrench_filtered', WrenchStamped, self.wrench_callback)
         # Publish velocities to robot
-        self.vel_pub = rospy.Publisher('/vel_proxy', Vector3Stamped, queue_size=5)
+        self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
         # self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
 
 	    # Set up servoing services
