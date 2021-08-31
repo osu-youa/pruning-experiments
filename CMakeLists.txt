@@ -61,6 +61,7 @@ add_service_files(
   FILES
   ServoWaypoints.srv
   RecordData.srv
+  MadeContact.srv
 )
 
 ## Generate actions in the 'action' folder
