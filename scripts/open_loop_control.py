@@ -5,7 +5,7 @@ import socket
 import numpy as np
 from geometry_msgs.msg import Vector3Stamped, Vector3, PoseStamped, PointStamped
 from pruning_experiments.srv import ServoWaypoints
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
 from std_msgs.msg import Bool
 
 last_pt = np.array([0.0, 0.0, 0.0])
@@ -15,21 +15,22 @@ CONTACT = False
 def handle_servo_request(req):
     pts = req.points
     vel = req.vel
-    servo_start()
+    use_contact = req.use_contact
     global ABORT
     global CONTACT
     ABORT = False
     CONTACT = False
 
-    aborted = False
+    servo_start()
+    code = 0
     try:
         for pt in pts:
-            aborted = servo_to_point(pt, vel)
-            if aborted:
+            code = servo_to_point(pt, vel, respond_to_contact=use_contact)
+            if code:
                 break
     finally:
         servo_stop()
-    return aborted
+    return code
 
 def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001, respond_to_contact=False):
 
@@ -46,7 +47,7 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001,
             command_vec = np.zeros(3)
             aborted = True
             done = True
-        elif CONTACT:
+        elif respond_to_contact and CONTACT:
             command_vec = np.zeros(3)
             done = True
         else:
@@ -68,10 +69,14 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001,
         vec.vector = Vector3(*command_vec)
         vel_pub.publish(vec)
 
-    if not aborted and CONTACT:
-        aborted = run_contact_controller()
+    code = 0
+    if aborted:
+        code = 1
+    elif CONTACT:
+        code = 2
+        run_admittance_ctrl()
 
-    return aborted
+    return code
 
 def pt_to_array(pt):
     if isinstance(pt, PointStamped):
@@ -105,7 +110,7 @@ if __name__ == '__main__':
     servo_start = rospy.ServiceProxy('servo_activate', Empty)
     servo_stop = rospy.ServiceProxy('servo_stop', Empty)
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
-    run_contact_controller = lambda: False    # Dummy
+    run_admittance_ctrl = rospy.ServiceProxy('run_admittance_controller', Trigger)
 
     rospy.Subscriber('tool_pose', PoseStamped, update_pose, queue_size=1)
     rospy.Subscriber('abort', Bool, handle_abort, queue_size=1)

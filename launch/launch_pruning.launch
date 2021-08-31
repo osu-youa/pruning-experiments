@@ -35,5 +35,7 @@
     <node name="open_loop_control_manager" pkg="pruning_experiments" type="open_loop_control.py" output="screen" />
     <node name="record_data" pkg="pruning_experiments" type="record_data.py" output="screen" />
     <node name="safety_status_monitor" pkg="pruning_experiments" type="safety_status_manager.py" output="screen" />
+    <include file="$(find pruning_experiments)/launch/ctlr_launch.launch" />
+
 
 </launch>

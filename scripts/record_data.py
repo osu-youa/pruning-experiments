@@ -28,6 +28,10 @@ class DataRecorder(object):
         rospy.Service(prefix + 'stop_record_data', Empty, self.stop_recording)
 
     def stop_recording(self, *_, **__):
+
+        if not self.RECORDING:
+            return []
+
         self.RECORDING = False
 
         for param in self.params_to_save:

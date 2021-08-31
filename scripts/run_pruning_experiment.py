@@ -12,7 +12,7 @@ from tf2_geometry_msgs import do_transform_point
 from tf.transformations import euler_from_quaternion, quaternion_from_euler, euler_from_matrix, euler_matrix
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState, PointCloud2
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
 import cPickle as pickle
 from pruning_experiments.srv import ServoWaypoints, RecordData
 from functools import partial
@@ -239,6 +239,8 @@ def run_open_loop(use_miscalibrated = False):
     else:
         noise = None
 
+    tare_force_sensor()
+
     tf_str = get_camera_tf(noise=noise)
     with subprocess_manager('rosrun tf static_transform_publisher {} tool0 camera_link 10'.format(tf_str)):
 
@@ -271,11 +273,14 @@ def run_open_loop(use_miscalibrated = False):
     response = open_loop_srv(waypoints, fwd_velocity, False).code
     if file_name is not None:
         stop_record_data_srv()
-        record_success(file_name, auto_failure=response)
+        record_success(file_name)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
 def run_closed_loop(use_nn=False):
+
+    tare_force_sensor()
+
     file_name = get_file_name(open_loop=False, variant=not use_nn)
     if use_nn:
         if file_name is None:
@@ -288,7 +293,6 @@ def run_closed_loop(use_nn=False):
             rospy.logerr("Neural network failed to start!")
         else:
             code = int(code)
-            print(code)
 
     else:
         # Find the intermediate point and target a straight line
@@ -315,11 +319,13 @@ def run_closed_loop(use_nn=False):
             print('[!] Warning, your data will not be recorded for this run!')
         else:
             record_data_srv(file_name)
-        response = open_loop_srv(waypoints, fwd_velocity, False).code
+        code = open_loop_srv(waypoints, fwd_velocity, True).code
+
+    rospy.loginfo("Return code: {}".format(code))
 
     if file_name is not None:
         stop_record_data_srv()
-        record_success(file_name, auto_failure=response)
+        record_success(file_name)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
@@ -346,6 +352,7 @@ if __name__ == '__main__':
     record_data_srv = rospy.ServiceProxy('record_data', RecordData)
     stop_record_data_srv = rospy.ServiceProxy('stop_record_data', Empty)
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
+    tare_force_sensor = rospy.ServiceProxy('/ur_hardware_interface/zero_ftsensor', Trigger)
 
     rospy.sleep(1.0)
 
