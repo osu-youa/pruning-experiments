@@ -75,7 +75,7 @@ class AdmitCtlr():
                 if self.last_stop_condition:
                     return_msg = (True, "")
                     break
-                if (rospy.Time.now() - start_time).to_sec() < 10.0:
+                if (rospy.Time.now() - start_time).to_sec() > 10.0:
                     return_msg = (False, "Timeout")
                     break
                 rate.sleep()
