@@ -22,8 +22,7 @@ from contextlib import contextmanager
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
 POSE_ID = None
-POSE_LIST = []
-ACTIVE_POSE = None
+POSE_INFO = {}
 
 INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
 STANDARD_CAMERA_POS = np.array([0.0719, 0.07416, -0.0050 + 0.031 - 0.0248/2])
@@ -43,10 +42,10 @@ def subprocess_manager(subproc_msg):
         resource.terminate()
 
 def get_file_name(open_loop=False, variant=False):
-    if ACTIVE_POSE is None:
+    if POSE_ID is None:
         return None
     identifier = open_loop * 2 + variant
-    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE))
+    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(POSE_ID, identifier))
 
 def record_success(file_name, auto_failure=False):
 
@@ -116,21 +115,6 @@ def generate_pose_grid(tf, x_offsets = (-0.02, 0, 0.02), y_offsets = (-0.02, 0, 
         rez.append(pose)
     return rez
 
-def save_status():
-    output = {
-        'poses': POSE_LIST,
-        'active_pose': None,
-    }
-    counter = 0
-    while True:
-        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(counter))
-        if os.path.exists(file):
-            counter += 1
-            continue
-        with open(file, 'wb') as fh:
-            pickle.dump(output, fh)
-        return counter
-
 def load_status(pose_id):
     file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
     try:
@@ -140,44 +124,47 @@ def load_status(pose_id):
         print('No such pose exists!')
         return
     global POSE_ID
-    global POSE_LIST
-    global ACTIVE_POSE
+    global POSE_INFO
+
     POSE_ID = pose_id
-    POSE_LIST = rez['poses']
-    ACTIVE_POSE = rez['active_pose']
+    POSE_INFO = rez
 
 # ==========
 # ACTIONS
 # ==========
 
-def set_active_pose():
-    global POSE_LIST
-    global ACTIVE_POSE
-    global POSE_ID
-    tf = retrieve_tf(tool_frame, base_frame)
-    POSE_LIST = generate_pose_grid(tf)
-    ACTIVE_POSE = None
-    POSE_ID = save_status()
-
 def load_pose():
 
-    to_load = int(raw_input('Which file ID do you want to load? '))
+    pose_files = [x for x in os.listdir(data_folder) if x.startswith('POSE') and x.endswith('.pickle')]
+    pose_ids = sorted([int(x.replace('.pickle', '').replace('POSE_', '')) for x in pose_files])
+
+    print('Which file ID do you want to load?')
+    print('Available IDs: {}'.format(', '.join(map(str, pose_ids))))
+    to_load = int(raw_input('Your choice: '))
     load_status(to_load)
-    if POSE_LIST:
-        plan_pose_srv(POSE_LIST[0], True)
+    if POSE_INFO:
+        plan_pose_srv(POSE_INFO['base'], True)
 
-def next_pose():
-    global ACTIVE_POSE
-    global POSE_LIST
-    if ACTIVE_POSE is None:
-        ACTIVE_POSE = 0
-    else:
-        ACTIVE_POSE = (ACTIVE_POSE + 1) % len(POSE_LIST)
 
-    plan_pose_srv(POSE_LIST[ACTIVE_POSE], True)
+def save_pose(pose_info=None):
+
+    if pose_info is None:
+        current_pose = rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0)
+        pose_info = {'base': current_pose}
+
+    pose_id = 0
+    while True:
+        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
+        if not os.path.exists(file):
+            with open(file, 'wb') as fh:
+                pickle.dump(pose_info, fh)
+            print('Saved pose ID {} at {}'.format(pose_id, file))
+            return pose_id
+        pose_id += 1
 
 def freedrive():
     pass
+
 
 def level_pose():
     tf = retrieve_tf(tool_frame, base_frame)
@@ -189,18 +176,6 @@ def level_pose():
     pose.pose.orientation = rot_new
 
     plan_pose_srv(pose, True)
-
-def preview_grid():
-    current_joints = rospy.wait_for_message('/joint_states', JointState)
-    to_move = POSE_LIST
-    if not POSE_LIST:
-        tf = retrieve_tf(tool_frame, base_frame)
-        to_move = generate_pose_grid(tf)
-
-    for pose in to_move:
-        plan_pose_srv(pose, True)
-
-    plan_joints_srv(current_joints, True)
 
 def get_camera_point_if_connected():
     camera_connected = False
@@ -358,12 +333,10 @@ if __name__ == '__main__':
 
     actions = [
         ('Quit', stop_program),
-        ('Set the active pose', set_active_pose),
         ('Load the previous active pose', load_pose),
-        ('Move to next pose', next_pose),
+        ('Save current pose', save_pose),
         # ('Freedrive to a new pose', freedrive),
         ('Level the existing pose', level_pose),
-        ('Preview target grid', preview_grid),
         ('Run open loop controller', run_open_loop),
         ('Run open loop controller miscalibrated', partial(run_open_loop, use_miscalibrated=True)),
         ('Run simple closed loop controller', run_closed_loop),
@@ -374,19 +347,10 @@ if __name__ == '__main__':
     while True:
 
         checklist = '\n'.join(['{}) {}'.format(i, msg) for i, (msg, _) in enumerate(actions)])
-        if not POSE_LIST:
-            status = 'Pose list has not been generated.'
+        if POSE_ID is None:
+            status = 'No pose is currently loaded.'
         else:
-            if POSE_ID is None:
-                prefix = '(UNSAVED POSE)'
-            else:
-                prefix = 'Pose {}'.format(POSE_ID)
-
-            if ACTIVE_POSE is None:
-                status = '{}: Currently not at given pose in the pose list.'.format(prefix)
-            else:
-                status = '{}: Currently at pose {} out of {}.'.format(prefix, ACTIVE_POSE + 1, len(POSE_LIST))
-
+            status = 'Working with Pose {}'.format(POSE_ID)
 
         msg = "What would you like to do?\n\n{}\n\n{}\n\nType action here: ".format(status, checklist)
 
