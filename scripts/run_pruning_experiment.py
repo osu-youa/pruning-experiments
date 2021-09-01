@@ -26,7 +26,7 @@ POSE_INFO = {}
 
 APPROACH_OFFSET = 0.15
 INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
-STANDARD_CAMERA_POS = np.array([0.0719, 0.07416, -0.0050 + 0.031 - 0.0248/2])
+STANDARD_CAMERA_POS = np.array([0.0719, -0.0050 + 0.031 - 0.0248/2, 0.07416])
 STANDARD_CAMERA_ROT = np.array([0, -np.radians(30), 0])
 
 # ==========
@@ -252,8 +252,8 @@ def get_camera_point_if_connected():
         pass
 
     if camera_connected:
-        print('Please click on a point in RViz to go to! (Waiting 30 seconds')
-        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=30.0)
+        print('Please click on a point in RViz to go to! (Waiting 45 seconds)')
+        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=45.0)
 
     else:
         # If no camera is connected, just run a test motion
@@ -378,7 +378,7 @@ if __name__ == '__main__':
 
     actions = [
         ('Quit', stop_program),
-        ('Load the previous active pose', load_pose),
+        ('Load an existing pose', load_pose),
         ('Save current pose', save_pose),
         ('Save pose from camera', save_pose_from_camera),
         # ('Freedrive to a new pose', freedrive),
