@@ -3,7 +3,7 @@
 
   <arg name="limited" default="false" />
   <arg name="transmission_hw_interface" default="false" />
-  <arg name="kinematics_config" default="false"/>
+  <arg name="kinematics_params" default="false"/>
 
   <param name="robot_description" textfile="$(find pruning_experiments)/robots/ur5e_cutter_new_calibrated_precise_level.urdf" />
 </launch>
