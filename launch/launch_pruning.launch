@@ -9,6 +9,7 @@
         <param name="extcontrol" value="extcontrol2.urp" />
     </group>
 
+    <param name="sim" value="$(arg sim)" />
     <param name="base_frame" value="base_link" />
 
     <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch">
