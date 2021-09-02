@@ -109,12 +109,12 @@ class AdmitCtlr():
         self.travel_amts = np.append(self.travel_amts, forward_travel)
         self.travel_amts = np.delete(self.travel_amts, 0)
 
-        if self.count % 50 == 0:
-            rospy.loginfo("mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
+        if self.count % 50 == 0 and self.activated:
+            rospy.loginfo_throttle(0.1, "mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
 
         no_travel = ((0.01 > self.travel_amts) & (self.travel_amts > -.01)).sum()
-        if no_travel > 7:
-            rospy.loginfo("NO FORWARD PROGRESS!!!!! STOPPING ROBOT!!")
+        if no_travel > 7 and self.activated:
+            rospy.loginfo_throttle(0.1, "NO FORWARD PROGRESS!!!!! STOPPING ROBOT!!")
             self.global_done = True
 
         # if -slow_f < w_diff[4] < slow_f and -slow_f < w_diff[5] < 0 and -slow_m < w_diff[0] < slow_m:

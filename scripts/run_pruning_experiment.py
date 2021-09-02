@@ -27,8 +27,8 @@ POSE_INFO = {}
 
 APPROACH_OFFSET = 0.15
 INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
-STANDARD_CAMERA_POS = np.array([0.0719, -0.0050 + 0.031 - 0.0248/2, 0.07416])
-STANDARD_CAMERA_ROT = np.array([0, -np.radians(30), 0])
+STANDARD_CAMERA_POS = np.array([-0.063179, 0.077119, 0.0420027])
+STANDARD_CAMERA_ROT = np.array([np.radians(10), 0, 0])
 
 # ==========
 # UTILS
@@ -55,32 +55,26 @@ def record_data(open_loop, variant):
     finally:
         if file_name:
             stop_record_data_srv()
+            print('Saved bag file to: {}'.format(file_name))
             record_success(file_name)
 
 def get_file_name(open_loop=False, variant=False):
     if POSE_ID is None:
         return None
     identifier = open_loop * 2 + variant
-    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(POSE_ID, identifier))
+    return os.path.join(data_folder, 'data_{}_{}.bag'.format(POSE_ID, identifier))
 
-def record_success(file_name, auto_failure=False):
+def record_success(file_name):
 
-    with open(file_name, 'rb') as fh:
-        data = pickle.load(fh)
-    if auto_failure:
-        in_cutter = False
-        dist = None
-        print('Run was aborted, marking cutter/distance as a failure...')
-    else:
-        dist = None
-        in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
-        if in_cutter:
-            dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+    record = 0.0
+    in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
+    if in_cutter:
+        dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+        record = dist
 
-    data['success'] = in_cutter
-    data['dist'] = dist
-    with open(file_name, 'wb') as fh:
-        pickle.dump(data, fh)
+    with open(file_name.replace('.bag', '.txt'), 'w') as fh:
+        fh.write(str(record))
+
 
 def tf_to_pose(tf, keep_header=False):
     header = None
@@ -206,7 +200,7 @@ def save_pose_from_camera():
     if rospy.get_param('sim', True):
         normal_vec = np.array([0, -1, 0])
     else:
-        normal_vec = np.array([-np.sqrt(2), -np.sqrt(2)], 0)
+        normal_vec = np.array([np.sqrt(2)/2, np.sqrt(2)/2, 0])
 
     z_axis = -normal_vec
     y_axis = np.array([0, 0, 1])
