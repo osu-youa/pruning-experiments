@@ -25,23 +25,17 @@ class AdmitCtlr():
         # Publish velocities to robot
         self.vel_pub = rospy.Publisher('/vel_command', Vector3Stamped, queue_size=5)
 
-        self.vel_pub_acc = rospy.Publisher('/vel_from_acc', Vector3Stamped, queue_size=5)
-        # Set up servoing services
-
         rospy.Service("run_admittance_controller", Trigger, self.handle_run_controller)
         self.activated = False
-
-        if is_connected:
-            servo_activate = rospy.ServiceProxy('/servo_activate', Empty)
-            self.servo_stop = rospy.ServiceProxy('/servo_stop', Empty)
 
         # Set up parameters
         # Desired (reference) wrench
         self.des_wrench = np.array([0, 0, 0, 0, 0, -1.5])
         # Controller gains 
 
-        self.Kf = .05 # M
-        self.Kd = 200 # D (or B, but the damping term)
+        # self.Kf = .04 # M^-1 (higher number = lower mass)
+        self.Kf = np.diag([0., 0., 0., 0., 0.08, 0.01])
+        self.Kd = 400 # D (or B, but the damping term)
 
         # Selection matrix
         self.l = np.diag([1, 0, 0, 0, 1, 1])
@@ -56,7 +50,7 @@ class AdmitCtlr():
         self.is_connected  = is_connected
 
         self.stop_force_thresh = 0.2
-        self.stop_torque_thresh = 0.005
+        self.stop_torque_thresh = 0.0025
         self.publish_freq = 500.0
 
         self.vel = Vector3Stamped()
@@ -67,9 +61,6 @@ class AdmitCtlr():
 
         # set up variables for end condition watching
         self.last_goal_checks = np.zeros(10)
-
-        if is_connected:
-            servo_activate()
 
         rospy.loginfo("Finished initializing admit ctlr node.")
 
@@ -194,9 +185,12 @@ class AdmitCtlr():
         
         # Admittance controller terms
         # acceleration due to force (M-1 * force_des-force_actual)
-        acc_des_force_term = -self.Kf*np.dot(self.l,self.deadzone(self.des_wrench-wrench_vec))
+        # acc_des_force_term = -self.Kf*np.dot(self.l,self.deadzone(self.des_wrench-wrench_vec))
+        acc_des_force_term = np.dot(-self.Kf,np.dot(self.l,self.deadzone(self.des_wrench-wrench_vec)))
         # acceleration due to damping (M-1 * B * x')
-        acc_des_damp_term = -self.Kf*self.Kd*self.vel_prev
+        # acc_des_damp_term = -self.Kf*self.Kd*self.vel_prev
+        acc_des_damp_term = np.dot(-self.Kf,self.Kd*self.vel_prev)
+        # acc_des_damp_term = np.zeros(6)
 
         # New controller -- use the acceleration and the publish rate to update the velocity
         vel_des = self.vel_prev + (1/self.publish_freq)*(acc_des_force_term+acc_des_damp_term)

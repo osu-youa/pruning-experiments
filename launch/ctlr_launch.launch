@@ -20,8 +20,8 @@
     <node pkg="pruning_experiments" name="admit_ctlr" type="admit_ctlr.py" output="screen">
     </node>
 
-    <node pkg="pruning_experiments" name="contact_watcher" type="contact_watcher.py" output="screen">
-    </node>
+    <!-- <node pkg="pruning_experiments" name="contact_watcher" type="contact_watcher.py" output="screen">
+    </node> -->
 
 <!-- ________________________________________________________________________________ -->
 <!-- |                                PLOTTING                                       |-->
@@ -32,7 +32,7 @@
     </node> 
 
     <node name="vel_command_plot" pkg="rqt_plot" type="rqt_plot" 
-        args="/vel_command/vector/z /vel_command/vector/y" >
+        args="/vel_command/vector/y /vel_command/vector/z" >
     </node>
 
 <!-- ________________________________________________________________________________ -->
@@ -46,6 +46,6 @@
 
     <!-- Plays force data from previous rosbags -->
     <!-- MUST ADD A DOUBLE DASH BEFORE CLOCK (but can't put in comments because XML) -->
-    <node pkg="rosbag" type="play" name="player" output="screen" args="--clock /home/hkolano/catkin_ws/src/pruning-experiments/data/2021-08-26-Trial1.bag"/>
+    <!-- <node pkg="rosbag" type="play" name="player" output="screen" args="clock /home/hkolano/catkin_ws/src/pruning-experiments/data/wrench_with_pushes.bag"/> -->
 
 </launch>
