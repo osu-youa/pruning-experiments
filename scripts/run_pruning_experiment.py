@@ -18,6 +18,7 @@ from pruning_experiments.srv import ServoWaypoints, RecordData
 from functools import partial
 import subprocess, shlex
 from contextlib import contextmanager
+from ur_dashboard_msgs.srv import Load
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
@@ -229,7 +230,12 @@ def save_pose_from_camera():
     save_pose(info_dict)
 
 def freedrive():
-    pass
+    program_load_srv('freedrive.urp')
+    program_play_srv()
+    try:
+        raw_input('Freedrive mode activated! Press Enter when complete.')
+    finally:
+        program_stop_srv()
 
 
 def level_pose():
@@ -374,6 +380,10 @@ if __name__ == '__main__':
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
     tare_force_sensor = rospy.ServiceProxy('/ur_hardware_interface/zero_ftsensor', Trigger)
 
+    program_load_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/load_program', Load)
+    program_play_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/play', Trigger)
+    program_stop_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/stop', Trigger)
+
     rospy.sleep(1.0)
 
     actions = [
@@ -381,7 +391,7 @@ if __name__ == '__main__':
         ('Load an existing pose', load_pose),
         ('Save current pose', save_pose),
         ('Save pose from camera', save_pose_from_camera),
-        # ('Freedrive to a new pose', freedrive),
+        ('Freedrive to a new pose', freedrive),
         ('Level the existing pose', level_pose),
         ('Run open loop controller', run_open_loop),
         ('Run open loop controller miscalibrated', partial(run_open_loop, use_miscalibrated=True)),
