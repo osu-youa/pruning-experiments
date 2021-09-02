@@ -22,7 +22,7 @@ def handle_abort(msg):
 
 if __name__ == '__main__':
 
-    ADDRESS = 'localhost'
+    ADDRESS = '169.254.63.255'
     PORT = 10000
 
     name = 'vel_command_client'

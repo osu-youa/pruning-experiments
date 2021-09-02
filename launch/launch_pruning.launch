@@ -9,6 +9,7 @@
         <param name="extcontrol" value="extcontrol2.urp" />
     </group>
 
+    <param name="sim" value="$(arg sim)" />
     <param name="base_frame" value="base_link" />
 
     <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch">
@@ -23,7 +24,7 @@
     </group>
     <group unless="$(arg use_cutter)">
         <param name="tool_frame" value="tool0" />
-        <include file="$(find ur5_e_moveit_config)/launch/move_group.launch" />
+        <include file="$(find ur5e_moveit_config)/launch/move_group.launch" />
     </group>
     <include file="$(find arm_utils)/launch/launch_base.launch" />
 

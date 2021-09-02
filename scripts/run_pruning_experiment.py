@@ -9,7 +9,7 @@ from geometry_msgs.msg import Vector3Stamped, Vector3, TransformStamped, Transfo
 from tf2_ros import TransformListener as TransformListener2, Buffer
 from itertools import product
 from tf2_geometry_msgs import do_transform_point
-from tf.transformations import euler_from_quaternion, quaternion_from_euler, euler_from_matrix, euler_matrix
+from tf.transformations import euler_from_quaternion, quaternion_from_euler, euler_from_matrix, euler_matrix, quaternion_about_axis, quaternion_multiply, quaternion_matrix
 from arm_utils.srv import HandlePosePlan, HandleJointPlan
 from sensor_msgs.msg import JointState, PointCloud2
 from std_srvs.srv import Empty, Trigger
@@ -18,16 +18,17 @@ from pruning_experiments.srv import ServoWaypoints, RecordData
 from functools import partial
 import subprocess, shlex
 from contextlib import contextmanager
+from ur_dashboard_msgs.srv import Load
 
 data_folder = os.path.join(os.path.expanduser('~'), 'data', 'icra2022')
 fwd_velocity = 0.03
 POSE_ID = None
-POSE_LIST = []
-ACTIVE_POSE = None
+POSE_INFO = {}
 
+APPROACH_OFFSET = 0.15
 INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
-STANDARD_CAMERA_POS = np.array([0.0719, 0.07416, -0.0050 + 0.031 - 0.0248/2])
-STANDARD_CAMERA_ROT = np.array([0, -np.radians(30), 0])
+STANDARD_CAMERA_POS = np.array([-0.063179, 0.077119, 0.0420027])
+STANDARD_CAMERA_ROT = np.array([np.radians(10), 0, 0])
 
 # ==========
 # UTILS
@@ -42,30 +43,38 @@ def subprocess_manager(subproc_msg):
     finally:
         resource.terminate()
 
+@contextmanager
+def record_data(open_loop, variant):
+    file_name = get_file_name(open_loop, variant)
+    if file_name is None:
+        print('[!] Warning, your data will not be recorded for this run!')
+    else:
+        record_data_srv(file_name)
+    try:
+        yield
+    finally:
+        if file_name:
+            stop_record_data_srv()
+            print('Saved bag file to: {}'.format(file_name))
+            record_success(file_name)
+
 def get_file_name(open_loop=False, variant=False):
-    if ACTIVE_POSE is None:
+    if POSE_ID is None:
         return None
     identifier = open_loop * 2 + variant
-    return os.path.join(data_folder, 'data_{}_{}.pickle'.format(identifier, ACTIVE_POSE))
+    return os.path.join(data_folder, 'data_{}_{}.bag'.format(POSE_ID, identifier))
 
-def record_success(file_name, auto_failure=False):
+def record_success(file_name):
 
-    with open(file_name, 'rb') as fh:
-        data = pickle.load(fh)
-    if auto_failure:
-        in_cutter = False
-        dist = None
-        print('Run was aborted, marking cutter/distance as a failure...')
-    else:
-        dist = None
-        in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
-        if in_cutter:
-            dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+    record = 0.0
+    in_cutter = bool(int(raw_input('Type 1 if branch is in cutter, 0 otherwise: ')))
+    if in_cutter:
+        dist = float(raw_input('Please measure the branch distance from the cutpoint (cm): '))
+        record = dist
 
-    data['success'] = in_cutter
-    data['dist'] = dist
-    with open(file_name, 'wb') as fh:
-        pickle.dump(data, fh)
+    with open(file_name.replace('.bag', '.txt'), 'w') as fh:
+        fh.write(str(record))
+
 
 def tf_to_pose(tf, keep_header=False):
     header = None
@@ -93,6 +102,9 @@ def pt_to_array(pt):
 
     return np.array([pt.x, pt.y, pt.z])
 
+def quat_to_array(quat):
+    return np.array([quat.x, quat.y, quat.z, quat.w])
+
 def retrieve_tf(base_frame, target_frame, stamp = rospy.Time()):
 
     # Retrieves a TransformStamped with a child frame of base_frame and a target frame of target_frame
@@ -116,21 +128,6 @@ def generate_pose_grid(tf, x_offsets = (-0.02, 0, 0.02), y_offsets = (-0.02, 0, 
         rez.append(pose)
     return rez
 
-def save_status():
-    output = {
-        'poses': POSE_LIST,
-        'active_pose': None,
-    }
-    counter = 0
-    while True:
-        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(counter))
-        if os.path.exists(file):
-            counter += 1
-            continue
-        with open(file, 'wb') as fh:
-            pickle.dump(output, fh)
-        return counter
-
 def load_status(pose_id):
     file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
     try:
@@ -140,44 +137,100 @@ def load_status(pose_id):
         print('No such pose exists!')
         return
     global POSE_ID
-    global POSE_LIST
-    global ACTIVE_POSE
+    global POSE_INFO
+
     POSE_ID = pose_id
-    POSE_LIST = rez['poses']
-    ACTIVE_POSE = rez['active_pose']
+    POSE_INFO = rez
 
 # ==========
 # ACTIONS
 # ==========
 
-def set_active_pose():
-    global POSE_LIST
-    global ACTIVE_POSE
-    global POSE_ID
-    tf = retrieve_tf(tool_frame, base_frame)
-    POSE_LIST = generate_pose_grid(tf)
-    ACTIVE_POSE = None
-    POSE_ID = save_status()
-
 def load_pose():
 
-    to_load = int(raw_input('Which file ID do you want to load? '))
+    pose_files = [x for x in os.listdir(data_folder) if x.startswith('POSE') and x.endswith('.pickle')]
+    pose_ids = sorted([int(x.replace('.pickle', '').replace('POSE_', '')) for x in pose_files])
+
+    print('Which file ID do you want to load?')
+    print('Available IDs: {}'.format(', '.join(map(str, pose_ids))))
+    to_load = int(raw_input('Your choice: '))
     load_status(to_load)
-    if POSE_LIST:
-        plan_pose_srv(POSE_LIST[0], True)
+    if POSE_INFO:
+        plan_pose_srv(POSE_INFO['base'], True)
 
-def next_pose():
-    global ACTIVE_POSE
-    global POSE_LIST
-    if ACTIVE_POSE is None:
-        ACTIVE_POSE = 0
+
+def save_pose(pose_info=None):
+
+    if pose_info is None:
+        current_pose = rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0)
+        pose_info = {'base': current_pose}
+
+    pose_id = 0
+    while True:
+        file = os.path.join(data_folder, 'POSE_{}.pickle'.format(pose_id))
+        if not os.path.exists(file):
+            with open(file, 'wb') as fh:
+                pickle.dump(pose_info, fh)
+            print('Saved pose ID {} at {}'.format(pose_id, file))
+            return pose_id
+        pose_id += 1
+
+def save_pose_from_camera():
+    tf_str = get_camera_tf()
+    with subprocess_manager('rosrun tf static_transform_publisher {} tool0 camera_link 10'.format(tf_str)):
+        pt = get_camera_point_if_connected()
+        if pt.header.frame_id != tool_frame:
+            tf = retrieve_tf(pt.header.frame_id, tool_frame)
+            pt = do_transform_point(pt, tf)
+        tool_to_base_tf = retrieve_tf(pt.header.frame_id, base_frame)
+
+    tool_to_base_tf_wrong = deepcopy(tool_to_base_tf)
+    pos = pt_to_array(tool_to_base_tf_wrong.transform.translation)
+    quat = quat_to_array(tool_to_base_tf_wrong.transform.rotation)
+    pos_noise = np.random.uniform(-1, 1, 3)
+    pos += pos_noise / np.linalg.norm(pos_noise) * 0.01
+    random_rot_axis = np.random.uniform(-1, 1, 3)
+    random_rot_axis /= np.linalg.norm(random_rot_axis)
+    noise_rot_quat = quaternion_about_axis(np.radians(5), random_rot_axis)
+    quat_noise = quaternion_multiply(quat, noise_rot_quat)
+    tool_to_base_tf_wrong.transform.translation = Vector3(*pos)
+    tool_to_base_tf_wrong.transform.rotation = Quaternion(*quat_noise)
+
+    # Compute the desired approach point orientation
+    if rospy.get_param('sim', True):
+        normal_vec = np.array([0, -1, 0])
     else:
-        ACTIVE_POSE = (ACTIVE_POSE + 1) % len(POSE_LIST)
+        normal_vec = np.array([np.sqrt(2)/2, np.sqrt(2)/2, 0])
 
-    plan_pose_srv(POSE_LIST[ACTIVE_POSE], True)
+    z_axis = -normal_vec
+    y_axis = np.array([0, 0, 1])
+    x_axis = np.cross(y_axis, z_axis)
+    rot_array = np.stack([x_axis, y_axis, z_axis], axis=1)
+
+    tool_euler = euler_from_matrix(rot_array)
+    tool_quat = quaternion_from_euler(*tool_euler)
+
+    # Use the computed TFs to retrieve the world frame locations
+    info_dict = {}
+    for tf, key in [(tool_to_base_tf, 'base'), (tool_to_base_tf_wrong, 'noisy')]:
+        pt_world = pt_to_array(do_transform_point(pt, tf))
+        approach_pt = pt_world + normal_vec * APPROACH_OFFSET
+        approach_pose = PoseStamped()
+        approach_pose.header.frame_id = base_frame
+        approach_pose.pose.position = Point(*approach_pt)
+        approach_pose.pose.orientation = Quaternion(*tool_quat)
+        info_dict[key] = approach_pose
+
+    save_pose(info_dict)
 
 def freedrive():
-    pass
+    program_load_srv('freedrive.urp')
+    program_play_srv()
+    try:
+        raw_input('Freedrive mode activated! Press Enter when complete.')
+    finally:
+        program_stop_srv()
+
 
 def level_pose():
     tf = retrieve_tf(tool_frame, base_frame)
@@ -190,18 +243,6 @@ def level_pose():
 
     plan_pose_srv(pose, True)
 
-def preview_grid():
-    current_joints = rospy.wait_for_message('/joint_states', JointState)
-    to_move = POSE_LIST
-    if not POSE_LIST:
-        tf = retrieve_tf(tool_frame, base_frame)
-        to_move = generate_pose_grid(tf)
-
-    for pose in to_move:
-        plan_pose_srv(pose, True)
-
-    plan_joints_srv(current_joints, True)
-
 def get_camera_point_if_connected():
     camera_connected = False
     try:
@@ -211,8 +252,8 @@ def get_camera_point_if_connected():
         pass
 
     if camera_connected:
-        print('Please click on a point in RViz to go to! (Waiting 30 seconds')
-        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=30.0)
+        print('Please click on a point in RViz to go to! (Waiting 45 seconds)')
+        final_target = rospy.wait_for_message('/clicked_point', PointStamped, timeout=45.0)
 
     else:
         # If no camera is connected, just run a test motion
@@ -223,109 +264,88 @@ def get_camera_point_if_connected():
 
     return final_target
 
-def get_camera_tf(noise=None):
+def get_camera_tf(as_str=True):
     pos = list(STANDARD_CAMERA_POS)
 
     rot_mat = euler_matrix(*STANDARD_CAMERA_ROT)[:3,:3]
     adjustment_mat = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
     final_euler = euler_from_matrix(rot_mat.dot(adjustment_mat))
     quat = list(quaternion_from_euler(*final_euler))
-    return ' '.join(['{}'] * 7).format(*pos + quat)
-
-def run_open_loop(use_miscalibrated = False):
-
-    if use_miscalibrated:
-        noise = None
+    if as_str:
+        return ' '.join(['{}'] * 7).format(*pos + quat)
     else:
-        noise = None
+        return pos, quat
+
+def run_open_loop(use_miscalibrated = False, run_from_current_pose=False):
+
+    success = True
+    if not POSE_INFO or run_from_current_pose:
+        pass
+    elif use_miscalibrated:
+        success = plan_pose_srv(POSE_INFO['noisy'], True).success
+    else:
+        success = plan_pose_srv(POSE_INFO['base'], True).success
+    if not success:
+        rospy.logerr('Pose failed to plan!')
+        return
 
     tare_force_sensor()
 
-    tf_str = get_camera_tf(noise=noise)
-    with subprocess_manager('rosrun tf static_transform_publisher {} tool0 camera_link 10'.format(tf_str)):
+    final_target_array = np.array([0.0, 0.0, APPROACH_OFFSET])
+    intermediate_array = final_target_array - INTERMEDIATE_OFFSET
 
-        final_target = get_camera_point_if_connected()
-        if final_target.header.frame_id != tool_frame:
-            tf = retrieve_tf(final_target.header.frame_id, tool_frame)
-            final_target = do_transform_point(final_target, tf)
-
-        final_target_array = pt_to_array(final_target)
-
-        if np.linalg.norm(final_target_array) > 0.4:
-            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
-        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
-
-        tf = retrieve_tf(final_target.header.frame_id, base_frame)
+    tf = retrieve_tf(tool_frame, base_frame)
     waypoints = []
     for array in [intermediate_array, final_target_array]:
         pt = PointStamped()
-        pt.header.frame_id = final_target.header.frame_id
+        pt.header.frame_id = tool_frame
         pt.point = Point(*array)
-        tfed_pt = do_transform_point(pt, tf)
-        waypoints.append(tfed_pt)
+        waypoints.append(do_transform_point(pt, tf))
 
-    file_name = get_file_name(open_loop=True, variant=use_miscalibrated)
-    if file_name is None:
-        print('[!] Warning, your data will not be recorded for this run!')
-    else:
-        record_data_srv(file_name)
-
-    response = open_loop_srv(waypoints, fwd_velocity, False).code
-    if file_name is not None:
-        stop_record_data_srv()
-        record_success(file_name)
+    with record_data(open_loop=True, variant=use_miscalibrated):
+        code = open_loop_srv(waypoints, fwd_velocity, False).code
+        rospy.loginfo("Return code: {}".format(code))
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
 def run_closed_loop(use_nn=False):
 
     tare_force_sensor()
+    if POSE_INFO:
+        success = plan_pose_srv(POSE_INFO['base'], True).success
+        if not success:
+            rospy.logerr('Pose failed to plan!')
+            return
 
-    file_name = get_file_name(open_loop=False, variant=not use_nn)
-    if use_nn:
-        if file_name is None:
-            print('[!] Warning, your data will not be recorded for this run!')
+    with record_data(open_loop=False, variant=not use_nn):
+
+        if use_nn:
+            code = subprocess.check_output(shlex.split('rosrun pruning_experiments velocity_command_client.py')).strip()
+            if code == str(-1):
+                rospy.logerr("Neural network failed to start!")
+            else:
+                code = int(code)
         else:
-            record_data_srv(file_name)
+            # Find the intermediate point and target a straight line
+            final_target_array = np.array([0.0, 0.0, APPROACH_OFFSET])
+            intermediate_array = final_target_array - INTERMEDIATE_OFFSET
+            pt = PointStamped()
+            pt.header.frame_id = tool_frame
+            pt.point = Point(*intermediate_array)
+            tf = retrieve_tf(tool_frame, base_frame)
+            tfed_pt = do_transform_point(pt, tf)
+            intermediate_world = pt_to_array(tfed_pt)
+            cutter_world = pt_to_array(rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0).pose.position)
+            movement_vec = (intermediate_world - cutter_world)
+            movement_vec /= np.linalg.norm(movement_vec)
+            actual_target = intermediate_world + 0.04 * movement_vec
+            tfed_pt.point = Point(*actual_target)
+            waypoints = [tfed_pt]
 
-        code = subprocess.check_output(shlex.split('rosrun pruning_experiments velocity_command_client.py')).strip()
-        if code == str(-1):
-            rospy.logerr("Neural network failed to start!")
-        else:
-            code = int(code)
+            code = open_loop_srv(waypoints, fwd_velocity, True).code
 
-    else:
-        # Find the intermediate point and target a straight line
-        final_target = get_camera_point_if_connected()
-        final_target_array = pt_to_array(final_target)
-        if np.linalg.norm(final_target_array) > 0.4:
-            rospy.logwarn('This point seems pretty far ahead! Are you sure this is what you want?')
-        intermediate_array = final_target_array - INTERMEDIATE_OFFSET
-        tf = retrieve_tf(final_target.header.frame_id, base_frame)
+        rospy.loginfo("Return code: {}".format(code))
 
-        pt = PointStamped()
-        pt.header.frame_id = final_target.header.frame_id
-        pt.point = Point(*intermediate_array)
-        tfed_pt = do_transform_point(pt, tf)
-        intermediate_world = pt_to_array(tfed_pt)
-        cutter_world = pt_to_array(rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0).pose.position)
-        movement_vec = (intermediate_world - cutter_world)
-        movement_vec /= np.linalg.norm(movement_vec)
-        actual_target = intermediate_world + 0.04 * movement_vec
-        tfed_pt.point = Point(*actual_target)
-        waypoints = [tfed_pt]
-
-        if file_name is None:
-            print('[!] Warning, your data will not be recorded for this run!')
-        else:
-            record_data_srv(file_name)
-        code = open_loop_srv(waypoints, fwd_velocity, True).code
-
-    rospy.loginfo("Return code: {}".format(code))
-
-    if file_name is not None:
-        stop_record_data_srv()
-        record_success(file_name)
     raw_input('Servoing done! Press Enter to rewind...')
     servo_rewind()
 
@@ -354,39 +374,34 @@ if __name__ == '__main__':
     servo_rewind = rospy.ServiceProxy('servo_rewind', Empty)
     tare_force_sensor = rospy.ServiceProxy('/ur_hardware_interface/zero_ftsensor', Trigger)
 
+    program_load_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/load_program', Load)
+    program_play_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/play', Trigger)
+    program_stop_srv = rospy.ServiceProxy('/ur_hardware_interface/dashboard/stop', Trigger)
+
     rospy.sleep(1.0)
 
     actions = [
         ('Quit', stop_program),
-        ('Set the active pose', set_active_pose),
-        ('Load the previous active pose', load_pose),
-        ('Move to next pose', next_pose),
-        # ('Freedrive to a new pose', freedrive),
+        ('Load an existing pose', load_pose),
+        ('Save current pose', save_pose),
+        ('Save pose from camera', save_pose_from_camera),
+        ('Freedrive to a new pose', freedrive),
         ('Level the existing pose', level_pose),
-        ('Preview target grid', preview_grid),
         ('Run open loop controller', run_open_loop),
         ('Run open loop controller miscalibrated', partial(run_open_loop, use_miscalibrated=True)),
         ('Run simple closed loop controller', run_closed_loop),
         ('Run NN closed loop controller', partial(run_closed_loop, use_nn=True)),
+        ('[DEBUG] Run open loop from current pose', partial(run_open_loop, run_from_current_pose=True)),
     ]
 
 
     while True:
 
         checklist = '\n'.join(['{}) {}'.format(i, msg) for i, (msg, _) in enumerate(actions)])
-        if not POSE_LIST:
-            status = 'Pose list has not been generated.'
+        if POSE_ID is None:
+            status = 'No pose is currently loaded.'
         else:
-            if POSE_ID is None:
-                prefix = '(UNSAVED POSE)'
-            else:
-                prefix = 'Pose {}'.format(POSE_ID)
-
-            if ACTIVE_POSE is None:
-                status = '{}: Currently not at given pose in the pose list.'.format(prefix)
-            else:
-                status = '{}: Currently at pose {} out of {}.'.format(prefix, ACTIVE_POSE + 1, len(POSE_LIST))
-
+            status = 'Working with Pose {}'.format(POSE_ID)
 
         msg = "What would you like to do?\n\n{}\n\n{}\n\nType action here: ".format(status, checklist)
 
