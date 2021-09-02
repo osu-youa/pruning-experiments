@@ -4,7 +4,7 @@
 #
 # Pruning project: subscribes to wrench data from UR5 and publishes control velocities to cut a branch
 #
-# Last modified 8/31/2021 by Hannah
+# Last modified 9/2/2021 by Hannah
 
 import rospy
 import sys
@@ -34,7 +34,6 @@ class AdmitCtlr():
         # Controller gains 
 
         # self.Kf = .04 # M^-1 (higher number = lower mass)
-        self.Kf = .04 # M
         self.Kf = np.diag([0., 0., 0., 0., 0.01, 0.1])
         self.Kd = 300 # D (or B, but the damping term)
         self.Kd = np.diag([0., 0., 0., 0., 400, 250])
@@ -58,7 +57,7 @@ class AdmitCtlr():
         self.vel = Vector3Stamped()
         self.vel_prev = np.array([0, 0, 0, 0, 0, 0])
         self.prev_z_vels = np.zeros(1000)
-        self.travel_amts = np.ones(10)
+        self.z_travel_amts = np.ones(10)
         self.vel.header.stamp = rospy.Time.now()
         self.vel.header.frame_id = 'tool0_controller'
         self.vel.vector = Vector3(0.0, 0.0, 0.0)
@@ -98,26 +97,34 @@ class AdmitCtlr():
         stop_f = self.stop_force_thresh
         stop_m = self.stop_torque_thresh
         w_diff = self.des_wrench-wrench_vec
-        self.prev_z_vels = np.append(self.prev_z_vels, z_vel)
-        self.prev_z_vels = np.delete(self.prev_z_vels, 0)
+        self.prev_z_vels = np.roll(self.prev_z_vels, -1)
+        self.prev_z_vels[-1] = z_vel
         slow_f = 1.5*stop_f
         slow_m = 1.5*stop_m
-        self.count += 1
         forward_travel = np.sum(self.prev_z_vels)/self.publish_freq*1000
-        self.travel_amts = np.append(self.travel_amts, forward_travel)
-        self.travel_amts = np.delete(self.travel_amts, 0)
+        self.z_travel_amts = np.append(self.z_travel_amts, forward_travel)
+        self.z_travel_amts = np.delete(self.z_travel_amts, 0)
 
-        if self.count % 50 == 0:
-            rospy.loginfo("mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
+        rospy.loginfo_throttle(0.1, "mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
 
-        no_travel = ((0.01 > self.travel_amts) & (self.travel_amts > -.01)).sum()
+        # How many times did it travel less than .01mm forwards or backwards in the last 10 steps?
+        no_travel = ((0.01 > self.z_travel_amts) & (self.z_travel_amts > -.01)).sum()
+        within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
+
+        rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
+
         if no_travel > 7:
-            rospy.loginfo("NO FORWARD PROGRESS!!!!! STOPPING ROBOT!!")
+            rospy.loginfo("No forward progress...")
+
+        if within_force_bounds:
+            rospy.loginfo("Forces within stopping bounds")
+
+        if no_travel > 7 and within_force_bounds:
+            rospy.loginfo("NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
             self.global_done = True
 
         # if -slow_f < w_diff[4] < slow_f and -slow_f < w_diff[5] < 0 and -slow_m < w_diff[0] < slow_m:
-        #     rospy.loginfo("close to goal state \n")
-        #     rospy.loginfo("moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
+            # rospy.loginfo("close to goal state \n")
 
        # Check if the forces are within the stop condition threshold, add 1 to queue, else a 0
        #  if -stop_f < w_diff[4] < stop_f and -stop_f < w_diff[5] < stop_f and -stop_m < w_diff[0] < stop_m:
