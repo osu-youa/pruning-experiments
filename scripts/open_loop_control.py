@@ -72,7 +72,7 @@ def servo_to_point(pt, vel, slow_thres = 0.02, slow_vel=0.005, stop_thres=0.001,
     code = 0
     if aborted:
         code = 1
-    elif CONTACT:
+    elif CONTACT and respond_to_contact:
         code = 2
         run_admittance_ctrl()
 

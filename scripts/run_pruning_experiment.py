@@ -26,7 +26,7 @@ POSE_ID = None
 POSE_INFO = {}
 
 APPROACH_OFFSET = 0.15
-INTERMEDIATE_OFFSET = np.array([0.0, 0.01, 0.05])
+INTERMEDIATE_OFFSET = np.array([0.0, 0.0, 0.0])
 STANDARD_CAMERA_POS = np.array([-0.063179, 0.077119, 0.0420027])
 STANDARD_CAMERA_ROT = np.array([np.radians(10), 0, 0])
 
@@ -302,6 +302,9 @@ def run_open_loop(use_miscalibrated = False, run_from_current_pose=False):
         pt.point = Point(*array)
         waypoints.append(do_transform_point(pt, tf))
 
+    if not np.abs(INTERMEDIATE_OFFSET).sum():
+        waypoints = waypoints[:1]
+
     with record_data(open_loop=True, variant=use_miscalibrated):
         code = open_loop_srv(waypoints, fwd_velocity, False).code
         rospy.loginfo("Return code: {}".format(code))
@@ -338,7 +341,7 @@ def run_closed_loop(use_nn=False):
             cutter_world = pt_to_array(rospy.wait_for_message('tool_pose', PoseStamped, timeout=1.0).pose.position)
             movement_vec = (intermediate_world - cutter_world)
             movement_vec /= np.linalg.norm(movement_vec)
-            actual_target = intermediate_world + 0.04 * movement_vec
+            actual_target = intermediate_world + 0.10 * movement_vec
             tfed_pt.point = Point(*actual_target)
             waypoints = [tfed_pt]
 

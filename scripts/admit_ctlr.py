@@ -80,7 +80,7 @@ class AdmitCtlr():
                 if self.global_done:
                     return_msg = (True, "")
                     break
-                if (rospy.Time.now() - start_time).to_sec() > 45.0:
+                if (rospy.Time.now() - start_time).to_sec() > 15.0:
                     return_msg = (False, "Timeout")
                     rospy.logwarn('Admittance controller timed out')
                     break
@@ -105,13 +105,13 @@ class AdmitCtlr():
         self.z_travel_amts = np.append(self.z_travel_amts, forward_travel)
         self.z_travel_amts = np.delete(self.z_travel_amts, 0)
 
-        rospy.loginfo_throttle(0.1, "mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
+        rospy.loginfo_throttle(1, "mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
 
         # How many times did it travel less than .01mm forwards or backwards in the last 10 steps?
         no_travel = ((0.01 > self.z_travel_amts) & (self.z_travel_amts > -.01)).sum()
         within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
 
-        rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
+        rospy.loginfo_throttle(1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
 
         if no_travel > 7 and self.activated:
             rospy.loginfo("No forward progress...")
