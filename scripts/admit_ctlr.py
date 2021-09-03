@@ -125,7 +125,7 @@ class AdmitCtlr():
         no_vert_travel = (0.05 > self.y_travel_amts).sum()
 
         # Is the force profile close to the stop condition?
-        within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
+        # within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
         within_torque_bounds = -.0025 < w_diff[0] < stop_m
 
         if (self.global_done == False) and ((rospy.Time.now() - self.start_time).to_sec() > 1.):
@@ -152,31 +152,6 @@ class AdmitCtlr():
                 self.global_done = True
         else:
             rospy.loginfo_throttle(1, "NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
-
-        # if -slow_f < w_diff[4] < slow_f and -slow_f < w_diff[5] < 0 and -slow_m < w_diff[0] < slow_m:
-            # rospy.loginfo("close to goal state \n")
-
-       # Check if the forces are within the stop condition threshold, add 1 to queue, else a 0
-       #  if -stop_f < w_diff[4] < stop_f and -stop_f < w_diff[5] < stop_f and -stop_m < w_diff[0] < stop_m:
-       #      stop_cond = True
-       #      self.last_goal_checks = np.append(self.last_goal_checks, 1)
-       #      rospy.loginfo("stop conditions met this step; may stop robot")
-       #  else:
-       #      stop_cond = False
-       #      self.last_goal_checks = np.append(self.last_goal_checks, 0)
-       #      if stop_cond != self.last_stop_condition:
-       #          rospy.loginfo("conditions not met; running")
-
-        # # Get rid of least recent stop condition check in queue
-        # self.last_goal_checks = np.delete(self.last_goal_checks, 0)
-        #
-        # # If the last 10 steps met conditions more than 5 times, stop robot
-        # if np.sum(self.last_goal_checks) > 2:
-        #     rospy.loginfo("CONDITIONS MET SEVERAL TIMES; STOPPING ROBOT!!!")
-        #     if self.is_connected:
-        #         self.global_done = True
-        #
-        # self.last_stop_condition = stop_cond
 
     def deadzone(self, wrench_in):
         ''' 
