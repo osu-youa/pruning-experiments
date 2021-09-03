@@ -51,13 +51,16 @@ class AdmitCtlr():
         self.is_connected = is_connected
 
         self.stop_force_thresh = 0.15
-        self.stop_torque_thresh = 0.0025
+        self.stop_torque_thresh = 0.01
         self.publish_freq = 500.0
+
+        self.prev_z_vels = np.zeros(1000)
+        self.prev_y_vels = np.zeros(1000)
+        self.z_travel_amts = np.ones(10)
+        self.y_travel_amts = np.ones(10)
 
         self.vel = Vector3Stamped()
         self.vel_prev = np.array([0, 0, 0, 0, 0, 0])
-        self.prev_z_vels = np.zeros(1000)
-        self.z_travel_amts = np.ones(10)
         self.vel.header.stamp = rospy.Time.now()
         self.vel.header.frame_id = 'tool0_controller'
         self.vel.vector = Vector3(0.0, 0.0, 0.0)
@@ -73,14 +76,14 @@ class AdmitCtlr():
 
         self.activated = True
         self.global_done = False
-        start_time = rospy.Time.now()
+        self.start_time = rospy.Time.now()
         rate = rospy.Rate(100)
         try:
             while True:
                 if self.global_done:
                     return_msg = (True, "")
                     break
-                if (rospy.Time.now() - start_time).to_sec() > 15.0:
+                if (rospy.Time.now() - self.start_time).to_sec() > 30.0:
                     return_msg = (False, "Timeout")
                     rospy.logwarn('Admittance controller timed out')
                     break
@@ -90,63 +93,65 @@ class AdmitCtlr():
 
         return return_msg
 
-    def check_goal_state(self, wrench_vec, z_vel):
+    def check_goal_state(self, wrench_vec, y_vel, z_vel):
         '''
         If the wrench is within desired parameters, stop servoing the robot.
         '''
+        # Set up threshold values
         stop_f = self.stop_force_thresh
         stop_m = self.stop_torque_thresh
         w_diff = self.des_wrench-wrench_vec
-        self.prev_z_vels = np.roll(self.prev_z_vels, -1)
-        self.prev_z_vels[-1] = z_vel
-        slow_f = 1.5*stop_f
-        slow_m = 1.5*stop_m
-        forward_travel = np.sum(self.prev_z_vels)/self.publish_freq*1000
-        self.z_travel_amts = np.append(self.z_travel_amts, forward_travel)
-        self.z_travel_amts = np.delete(self.z_travel_amts, 0)
 
-        rospy.loginfo_throttle(1, "mm of forward travel in 1s: {}".format(np.sum(self.prev_z_vels)/self.publish_freq*1000))
+        # Save the most recent velocity commands
+        self.prev_z_vels = np.roll(self.prev_z_vels, -1)
+        self.prev_y_vels = np.roll(self.prev_y_vels, -1)
+        self.prev_z_vels[-1] = z_vel
+        self.prev_y_vels[-1] = y_vel
+
+        # Integrate velocity over time to get distance (over 1s, in mm))
+        forward_travel = np.sum(self.prev_z_vels/self.publish_freq)*1000
+        vertical_travel = np.sum(self.prev_y_vels/self.publish_freq)*1000
+
+        # Save the travel amounts
+        self.z_travel_amts = np.roll(self.z_travel_amts, -1)
+        self.y_travel_amts = np.roll(self.y_travel_amts, -1)
+        self.z_travel_amts[-1] = forward_travel
+        self.y_travel_amts[-1] = vertical_travel
 
         # How many times did it travel less than .01mm forwards or backwards in the last 10 steps?
-        no_travel = ((0.01 > self.z_travel_amts) & (self.z_travel_amts > -.01)).sum()
-        within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
+        # no_forward_travel = ((0.01 > self.z_travel_amts) & (self.z_travel_amts > -.01)).sum()
+        no_forward_travel = (0.5 > self.z_travel_amts).sum()
+        # no_vert_travel = ((0.01 > self.y_travel_amts) & (self.y_travel_amts > -.01)).sum()
+        no_vert_travel = (0.05 > self.y_travel_amts).sum()
 
-        rospy.loginfo_throttle(1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
+        # Is the force profile close to the stop condition?
+        # within_force_bounds = (-stop_f < w_diff[4] < stop_f) & (-stop_f < w_diff[5] < stop_f) & (-stop_m < w_diff[0] < stop_m)
+        within_torque_bounds = -.0025 < w_diff[0] < stop_m
 
-        if no_travel > 7 and self.activated:
-            rospy.loginfo("No forward progress...")
+        if self.activated and (self.global_done == False) and ((rospy.Time.now() - self.start_time).to_sec() > 1.):
+            rospy.loginfo_throttle(1, "mm of travel in 1s:  forward: %0.5f vertical: %0.5f", forward_travel, vertical_travel)
+            rospy.loginfo_throttle(1, "moment diff = %0.4f", w_diff[0])
 
-        if within_force_bounds and self.activated:
-            rospy.loginfo("Forces within stopping bounds")
+            # if no_forward_travel > 7:
+            #     # rospy.loginfo("No forward progress...")
+            #     rospy.loginfo_throttle(.1, "No forward progress...")
 
-        if no_travel > 7 and within_force_bounds:
-            rospy.loginfo("NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
-            self.global_done = True
+            # if no_vert_travel > 7:
+            #     # rospy.loginfo("No vertical progress...")
+            #     rospy.loginfo_throttle(.1, "No vertical progress...")
 
-        # if -slow_f < w_diff[4] < slow_f and -slow_f < w_diff[5] < 0 and -slow_m < w_diff[0] < slow_m:
-            # rospy.loginfo("close to goal state \n")
+            # if no_forward_travel > 7 and no_vert_travel > 7:
+            #     rospy.loginfo("NO NET TRAVEL IN ANY DIRECTION!")
+            #     rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
 
-       # Check if the forces are within the stop condition threshold, add 1 to queue, else a 0
-       #  if -stop_f < w_diff[4] < stop_f and -stop_f < w_diff[5] < stop_f and -stop_m < w_diff[0] < stop_m:
-       #      stop_cond = True
-       #      self.last_goal_checks = np.append(self.last_goal_checks, 1)
-       #      rospy.loginfo("stop conditions met this step; may stop robot")
-       #  else:
-       #      stop_cond = False
-       #      self.last_goal_checks = np.append(self.last_goal_checks, 0)
-       #      if stop_cond != self.last_stop_condition:
-       #          rospy.loginfo("conditions not met; running")
+            # if within_torque_bounds:
+            #     rospy.loginfo("Moment within stopping bounds")
 
-        # # Get rid of least recent stop condition check in queue
-        # self.last_goal_checks = np.delete(self.last_goal_checks, 0)
-        #
-        # # If the last 10 steps met conditions more than 5 times, stop robot
-        # if np.sum(self.last_goal_checks) > 2:
-        #     rospy.loginfo("CONDITIONS MET SEVERAL TIMES; STOPPING ROBOT!!!")
-        #     if self.is_connected:
-        #         self.global_done = True
-        #
-        # self.last_stop_condition = stop_cond
+            if no_forward_travel > 7 and no_vert_travel > 7 and within_torque_bounds:
+                rospy.loginfo("NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
+                self.global_done = True
+        else:
+            rospy.loginfo_throttle(1, "NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
 
     def deadzone(self, wrench_in):
         ''' 
@@ -204,6 +209,10 @@ class AdmitCtlr():
         Callback function to deal with incoming wrench messages
         """
         # rospy.loginfo("Force subscriber received a wrench message!")
+        # try:
+        #     self.start_time
+        # except AttributeError:
+        #     self.start_time = rospy.Time.now()
 
         # Write the wrench_msg into an array
         w = wrench_msg.wrench
@@ -238,7 +247,7 @@ class AdmitCtlr():
         self.show_ctlr_direction(vel_y_limited, vel_z_limited)
 
         #Check for the stop condition
-        self.check_goal_state(wrench_vec, vel_z_limited)
+        self.check_goal_state(wrench_vec, vel_y_limited, vel_z_limited)
 
 if __name__ == '__main__':
     # Initialize node
