@@ -46,6 +46,6 @@
 
     <!-- Plays force data from previous rosbags -->
     <!-- MUST ADD A DOUBLE DASH BEFORE CLOCK (but can't put in comments because XML) -->
-    <!-- <node pkg="rosbag" type="play" name="player" output="screen" args="clock /home/hkolano/catkin_ws/src/pruning-experiments/data/data_3_0_b.bag"/> -->
+    <!-- <node pkg="rosbag" type="play" name="player" output="screen" args="clock /home/hkolano/catkin_ws/src/pruning-experiments/data/data_4_0_a.bag"/> -->
 
 </launch>
