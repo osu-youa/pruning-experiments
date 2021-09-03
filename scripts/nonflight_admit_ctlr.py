@@ -76,14 +76,14 @@ class AdmitCtlr():
 
         self.activated = True
         self.global_done = False
-        self.start_time = rospy.Time.now()
+        start_time = rospy.Time.now()
         rate = rospy.Rate(100)
         try:
             while True:
                 if self.global_done:
                     return_msg = (True, "")
                     break
-                if (rospy.Time.now() - self.start_time).to_sec() > 45.0:
+                if (rospy.Time.now() - start_time).to_sec() > 45.0:
                     return_msg = (False, "Timeout")
                     rospy.logwarn('Admittance controller timed out')
                     break
@@ -101,6 +101,8 @@ class AdmitCtlr():
         stop_f = self.stop_force_thresh
         stop_m = self.stop_torque_thresh
         w_diff = self.des_wrench-wrench_vec
+        slow_f = 1.5*stop_f
+        slow_m = 1.5*stop_m
 
         # Save the most recent velocity commands 
         self.prev_z_vels = np.roll(self.prev_z_vels, -1)      
@@ -129,23 +131,29 @@ class AdmitCtlr():
         within_torque_bounds = -.0025 < w_diff[0] < stop_m
 
         if (self.global_done == False) and ((rospy.Time.now() - self.start_time).to_sec() > 1.):
-            rospy.loginfo_throttle(0.25, "mm of travel in 1s:  forward: %0.5f vertical: %0.5f", forward_travel, vertical_travel)
-            rospy.loginfo_throttle(0.25, "moment diff = %0.4f", w_diff[0])
+            rospy.loginfo_throttle(0.1, "mm of travel in 1s:  forward: %0.5f vertical: %0.5f", forward_travel, vertical_travel)
+            rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
 
-            # if no_forward_travel > 7:
-            #     # rospy.loginfo("No forward progress...")
-            #     rospy.loginfo_throttle(.1, "No forward progress...")
+            if no_forward_travel > 7:
+                # rospy.loginfo("No forward progress...")
+                rospy.loginfo_throttle(.1, "No forward progress...")
 
-            # if no_vert_travel > 7:
-            #     # rospy.loginfo("No vertical progress...")
-            #     rospy.loginfo_throttle(.1, "No vertical progress...")
+            if no_vert_travel > 7:
+                # rospy.loginfo("No vertical progress...")
+                rospy.loginfo_throttle(.1, "No vertical progress...")
 
-            # if no_forward_travel > 7 and no_vert_travel > 7:
-            #     rospy.loginfo("NO NET TRAVEL IN ANY DIRECTION!")
-            #     rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
+            if no_forward_travel > 7 and no_vert_travel > 7:
+                rospy.loginfo("NO NET TRAVEL IN ANY DIRECTION!")
+                rospy.loginfo_throttle(0.1, "moment diff = %0.4f; force y diff: %0.3f; force z diff: %0.3f", w_diff[0], w_diff[4], w_diff[5])
 
-            # if within_torque_bounds:
-            #     rospy.loginfo("Moment within stopping bounds")
+            # if no_vert_travel > 7 and within_torque_bounds:
+            #     rospy.loginfo("MOMENT AND VERT TRAVEL WITHIN STOP BOUNDS")
+
+            if within_torque_bounds:
+                rospy.loginfo("Moment within stopping bounds")
+
+            # if within_force_bounds:
+            #     rospy.loginfo("Forces within stopping bounds")
 
             if no_forward_travel > 7 and no_vert_travel > 7 and within_torque_bounds:
                 rospy.loginfo("NO FORWARD PROGRESS AND WITHIN FORCE BOUNDS; STOPPING ROBOT!!!")
@@ -234,10 +242,10 @@ class AdmitCtlr():
         Callback function to deal with incoming wrench messages
         """
         # rospy.loginfo("Force subscriber received a wrench message!")
-        # try:
-        #     self.start_time
-        # except AttributeError:
-        #     self.start_time = rospy.Time.now() 
+        try:
+            self.start_time
+        except AttributeError:
+            self.start_time = rospy.Time.now() 
 
         # Write the wrench_msg into an array
         w = wrench_msg.wrench
