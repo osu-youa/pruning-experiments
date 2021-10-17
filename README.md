@@ -1,5 +1,15 @@
 # pruning-experiments
 
+Code used to run the pruning experiments "Precision fruit tree pruning using a learned hybrid vision/interaction controller" on the ROS side. The non-ROS neural network code used to train the system can be found in this repository: https://github.com/osu-youa/pruning-pybullet 
+
+The main interface used to control the interface is in scripts/run_pruning_experiment.py. It allows you to save poses and run the different controllers. Note that due to the neural network being run on a non-ROS computer, you will have to plug the Realsense into the ROS computer to access the point cloud data, and then plug it into the neural network computer afterwards for running the experiment.
+
+The typical flow of an experiment is:
+
+1. Freedrive the arm to a desired viewpoint of the setup.
+2. Select "Save pose from camera" and obtain a target via the point cloud from the camera (you will click on the point in RViz to select it).
+3. Load the pose and run the 4 controllers.
+
 ## Controller Nodes
 
 __force_filter.py__ subscribes to the /wrench topic and outputs a filtered WrenchStamped to /wrench_filtered. Right now it averages 51 points, and only does the relevant values for the controller: force.y, force.z, and torque.x. 
